@@ -1,0 +1,33 @@
+{
+  "name": "chatgpt-codex-tools-mcp",
+  "version": "0.1.0",
+  "description": "Codex-style local workspace tools exposed to ChatGPT through MCP.",
+  "type": "module",
+  "main": "dist/server.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx src/server.ts",
+    "start": "node dist/server.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "keywords": [
+    "chatgpt",
+    "codex",
+    "mcp",
+    "model-context-protocol",
+    "openai",
+    "local-tools"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "express": "^5.2.1",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^25.9.1",
+    "tsx": "^4.22.3",
+    "typescript": "^6.0.3"
+  }
+}
