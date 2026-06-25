@@ -148,7 +148,7 @@ init-windows.cmd
 3. 本机 `tunnel-client.exe` 路径。
 4. 本机专用启动脚本。
 
-它会生成这些被 git 忽略的本机文件：
+它会生成这些本机启动文件：
 
 ```text
 start-mcp.local.cmd

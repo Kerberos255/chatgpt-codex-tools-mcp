@@ -161,7 +161,7 @@ The initializer asks for or configures:
 3. The local `tunnel-client.exe` path.
 4. Local-only startup files for this machine.
 
-It creates these ignored local files:
+It creates these local startup files:
 
 ```text
 start-mcp.local.cmd
