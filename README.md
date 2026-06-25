@@ -142,9 +142,38 @@ auth: no authentication (use only behind a private/local tunnel)
 
 ---
 
-## Windows helper scripts
+## Windows quick start
 
-For first-time Windows setup, use the initializer:
+For regular Windows users, use the root `.cmd` files. The PowerShell scripts under `scripts/` are implementation details and advanced entry points.
+
+### 1. Initialize once
+
+Run:
+
+```text
+init-windows.cmd
+```
+
+The initializer asks for or configures:
+
+1. Allowed workspace roots, for example `D:\Projects`.
+2. npm dependencies and `dist/server.js` build output.
+3. The local `tunnel-client.exe` path.
+4. Local-only startup files for this machine.
+
+It creates these ignored local files:
+
+```text
+start-mcp.local.cmd
+start-tunnel.local.cmd
+start-tunnel.local.ps1
+```
+
+These files are intentionally not committed to git because they contain machine-specific paths and settings. The initializer does **not** save your runtime key. When the tunnel starts, it uses `CONTROL_PLANE_API_KEY` from the current environment if present; otherwise it asks for it with a hidden PowerShell prompt.
+
+If `tunnel-client.exe` is missing, the initializer opens the download pages and shows the recommended local path. Download it, place it there, rerun `init-windows.cmd`, then run `start-all.cmd`.
+
+Advanced initializer usage:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\init-windows.ps1 `
@@ -152,36 +181,29 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\init-windows.ps1 `
   -OpenTunnelDownloadPages
 ```
 
-What it does:
+### 2. Start MCP + tunnel
 
-1. Installs npm dependencies and builds `dist/server.js`.
-2. Stores your allowed workspace roots in local start scripts.
-3. Looks for `tunnel-client.exe`.
-4. Opens the OpenAI tunnel settings / latest release pages when the tunnel client is missing.
-5. Creates `start-mcp.local.cmd`, `start-tunnel.local.cmd`, and `start-tunnel.local.ps1` for this machine.
-
-The generated `*.local.cmd` and `*.local.ps1` files are intentionally ignored by git. The initializer does not save your runtime key into these files. When the tunnel starts, it uses `CONTROL_PLANE_API_KEY` from the current environment if present; otherwise it asks for it with a hidden PowerShell prompt.
-
-After initialization, start both the local MCP server and the tunnel with:
+After initialization, run:
 
 ```text
 start-all.cmd
 ```
 
-`start-all.cmd` opens two windows:
+It opens two windows:
 
-1. `start-mcp.local.cmd` or fallback `start-mcp.cmd` for the local MCP server.
-2. `start-tunnel.local.cmd` for the private tunnel. This wrapper calls `start-tunnel.local.ps1`, which prompts for the runtime key when needed.
+1. MCP server window, using `start-mcp.local.cmd` or fallback `start-mcp.cmd`.
+2. Tunnel window, using `start-tunnel.local.cmd`.
 
-If `start-tunnel.local.cmd` or `start-tunnel.local.ps1` is missing, run the initializer first.
+Keep both windows running while using the ChatGPT connector.
 
-You can also start only the local MCP server with:
+### 3. Optional single-purpose launchers
 
 ```text
-start-mcp.cmd
+start-mcp.cmd       # local MCP server only
+start-tunnel.cmd    # private tunnel only, after initialization
 ```
 
-or:
+PowerShell MCP-only entry point:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\start-mcp.ps1
@@ -201,7 +223,7 @@ Example:
 
 ```cmd
 set "CTM_ALLOWED_ROOTS=D:\Projects"
-set "NODE_BIN=C:\Tools\nodejs"
+set "OPENCLAW_NODE_BIN=C:\Tools\nodejs"
 set "CTM_NPM_CACHE=D:\npm-cache"
 start-mcp.cmd
 ```
@@ -228,7 +250,7 @@ http://127.0.0.1:3333/mcp
 Optional profile initialization:
 
 ```powershell
-$env:CONTROL_PLANE_API_KEY = "sk-..."
+$env:CONTROL_PLANE_API_KEY = "YOUR_RUNTIME_KEY_HERE"
 .\tools\tunnel-client\tunnel-client.exe init `
   --sample sample_mcp_stdio_local `
   --profile codex_MCP `

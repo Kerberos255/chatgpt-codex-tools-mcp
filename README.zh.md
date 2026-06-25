@@ -1,4 +1,4 @@
-English | [中文](./README.zh.md)
+[English](./README.md) | 中文
 
 # chatgpt-codex-tools-mcp
 
@@ -129,9 +129,38 @@ auth: no authentication (use only behind a private/local tunnel)
 
 ---
 
-## Windows 辅助脚本
+## Windows 快速开始
 
-首次使用运行：
+普通 Windows 用户优先使用根目录下的 `.cmd` 文件。`scripts/` 里的 PowerShell 脚本是具体实现和高级入口。
+
+### 1. 首次初始化
+
+运行：
+
+```text
+init-windows.cmd
+```
+
+初始化脚本会询问或配置：
+
+1. 允许访问的工作区根目录，例如 `D:\Projects`。
+2. npm 依赖和 `dist/server.js` 构建产物。
+3. 本机 `tunnel-client.exe` 路径。
+4. 本机专用启动脚本。
+
+它会生成这些被 git 忽略的本机文件：
+
+```text
+start-mcp.local.cmd
+start-tunnel.local.cmd
+start-tunnel.local.ps1
+```
+
+这些文件不会提交到仓库，因为它们包含本机路径和配置。初始化脚本不会保存 runtime key。启动 tunnel 时，如果当前环境有 `CONTROL_PLANE_API_KEY` 就直接使用；否则会用隐藏 PowerShell 输入提示临时输入。
+
+如果缺少 `tunnel-client.exe`，初始化脚本会打开下载页面并提示推荐放置路径。下载后放到提示的位置，重新运行 `init-windows.cmd`，然后再运行 `start-all.cmd`。
+
+高级初始化用法：
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\init-windows.ps1 `
@@ -139,18 +168,27 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\init-windows.ps1 `
   -OpenTunnelDownloadPages
 ```
 
-该脚本会：
-1. 安装依赖并构建 `dist/server.js`。
-2. 保存允许的工作区根目录到本地启动脚本。
-3. 查找 `tunnel-client.exe`。
-4. 缺少时打开 OpenAI tunnel 设置/最新发布页。
-5. 创建本机专用的 `start-mcp.local.cmd`、`start-tunnel.local.cmd`、`start-tunnel.local.ps1`。
+### 2. 启动 MCP + tunnel
 
-生成的 `*.local.cmd` 和 `*.local.ps1` 已被 `.gitignore` 排除，不会提交到 git。
+初始化完成后运行：
 
-初始化后，双击 `start-all.cmd` 会打开两个窗口：
-1. MCP server（通过 `start-mcp.local.cmd` 或 fallback `start-mcp.cmd`）
-2. 私有 tunnel（通过 `start-tunnel.local.cmd`）
+```text
+start-all.cmd
+```
+
+它会打开两个窗口：
+
+1. MCP server 窗口，使用 `start-mcp.local.cmd` 或 fallback `start-mcp.cmd`。
+2. tunnel 窗口，使用 `start-tunnel.local.cmd`。
+
+使用 ChatGPT 连接器期间，请保持两个窗口都在运行。
+
+### 3. 可选的单独启动入口
+
+```text
+start-mcp.cmd       # 只启动本地 MCP server
+start-tunnel.cmd    # 只启动私有 tunnel，需先完成初始化
+```
 
 常用环境变量：
 
@@ -166,7 +204,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\init-windows.ps1 `
 
 ```cmd
 set "CTM_ALLOWED_ROOTS=D:\Projects"
-set "NODE_BIN=C:\Tools\nodejs"
+set "OPENCLAW_NODE_BIN=C:\Tools\nodejs"
 set "CTM_NPM_CACHE=D:\npm-cache"
 start-mcp.cmd
 ```

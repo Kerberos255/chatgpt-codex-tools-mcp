@@ -26,7 +26,7 @@ if exist ".\start-tunnel.local.cmd" (
   echo.
   echo start-tunnel.local.cmd was not found.
   echo Run the initializer first:
-  echo powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\init-windows.ps1 -AllowedRoots "D:\Projects" -OpenTunnelDownloadPages
+  echo init-windows.cmd
   echo.
 )
 
