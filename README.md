@@ -103,7 +103,7 @@ On Windows, the helper script checks Node in this order:
 ## Install
 
 ```bash
-git clone https://github.com/YOUR_NAME/chatgpt-codex-tools-mcp.git
+git clone https://github.com/Kerberos255/chatgpt-codex-tools-mcp.git
 cd chatgpt-codex-tools-mcp
 npm install
 npm run build
@@ -156,11 +156,24 @@ What it does:
 2. Stores your allowed workspace roots in local start scripts.
 3. Looks for `tunnel-client.exe`.
 4. Opens the OpenAI tunnel settings / latest release pages when the tunnel client is missing.
-5. Creates `start-mcp.local.cmd` and `start-tunnel.local.cmd` for this machine.
+5. Creates `start-mcp.local.cmd`, `start-tunnel.local.cmd`, and `start-tunnel.local.ps1` for this machine.
 
-The generated `*.local.cmd` files are intentionally ignored by git.
+The generated `*.local.cmd` and `*.local.ps1` files are intentionally ignored by git. The initializer does not save your runtime key into these files. When the tunnel starts, it uses `CONTROL_PLANE_API_KEY` from the current environment if present; otherwise it asks for it with a hidden PowerShell prompt.
 
-After `npm install` and `npm run build`, you can also start the local MCP server with:
+After initialization, start both the local MCP server and the tunnel with:
+
+```text
+start-all.cmd
+```
+
+`start-all.cmd` opens two windows:
+
+1. `start-mcp.local.cmd` or fallback `start-mcp.cmd` for the local MCP server.
+2. `start-tunnel.local.cmd` for the private tunnel. This wrapper calls `start-tunnel.local.ps1`, which prompts for the runtime key when needed.
+
+If `start-tunnel.local.cmd` or `start-tunnel.local.ps1` is missing, run the initializer first.
+
+You can also start only the local MCP server with:
 
 ```text
 start-mcp.cmd
@@ -331,7 +344,7 @@ CTM_ACCESS_MODE=review
 ## 安装和启动
 
 ```bash
-git clone https://github.com/YOUR_NAME/chatgpt-codex-tools-mcp.git
+git clone https://github.com/Kerberos255/chatgpt-codex-tools-mcp.git
 cd chatgpt-codex-tools-mcp
 npm install
 npm run build

@@ -25,6 +25,10 @@ function Quote-CmdValue([string]$Value) {
   return $Value.Replace('^', '^^').Replace('&', '^&').Replace('|', '^|').Replace('<', '^<').Replace('>', '^>')
 }
 
+function Quote-PsValue([string]$Value) {
+  return "'" + $Value.Replace("'", "''") + "'"
+}
+
 Write-Step "Configure allowed workspace roots"
 if (-not $AllowedRoots) {
   $AllowedRoots = Read-Host "Allowed roots, comma-separated, for example D:\Projects"
@@ -72,6 +76,11 @@ $tunnelEscaped = Quote-CmdValue $TunnelClientPath
 $proxyEscaped = Quote-CmdValue $ProxyUrl
 $healthEscaped = Quote-CmdValue $HealthAddr
 
+$profilePs = Quote-PsValue $Profile
+$tunnelPs = Quote-PsValue $TunnelClientPath
+$proxyPs = Quote-PsValue $ProxyUrl
+$healthPs = Quote-PsValue $HealthAddr
+
 $startMcp = @"
 @echo off
 setlocal EnableExtensions
@@ -84,53 +93,70 @@ pause
 "@
 Set-Content -LiteralPath (Join-Path $projectRoot "start-mcp.local.cmd") -Value $startMcp -Encoding ASCII
 
-$startTunnel = @"
+$startTunnelCmd = @"
 @echo off
 setlocal EnableExtensions
 cd /d "%~dp0"
-set "PROFILE=$profileEscaped"
-set "HEALTH_ADDR=$healthEscaped"
-set "TUNNEL_CLIENT=$tunnelEscaped"
-set "PROXY_URL=$proxyEscaped"
-
-if not "%PROXY_URL%"=="" (
-  set "HTTP_PROXY=%PROXY_URL%"
-  set "HTTPS_PROXY=%PROXY_URL%"
-  set "http_proxy=%PROXY_URL%"
-  set "https_proxy=%PROXY_URL%"
-  set "ALL_PROXY=%PROXY_URL%"
-  set "all_proxy=%PROXY_URL%"
-)
-set "NO_PROXY=127.0.0.1,localhost,::1"
-set "no_proxy=127.0.0.1,localhost,::1"
-
-if "%CONTROL_PLANE_API_KEY%"=="" (
-  echo Set CONTROL_PLANE_API_KEY in this terminal before running the tunnel.
-  echo Example: set "CONTROL_PLANE_API_KEY=sk-..."
-  pause
-  exit /b 1
-)
-
-if not exist "%TUNNEL_CLIENT%" (
-  echo tunnel-client.exe not found: %TUNNEL_CLIENT%
-  pause
-  exit /b 1
-)
-
-"%TUNNEL_CLIENT%" doctor --profile "%PROFILE%" --explain --health.listen-addr "%HEALTH_ADDR%"
-if errorlevel 1 (
-  echo.
-  echo doctor reported warnings/errors. In No Authentication mode, OAuth metadata warnings may be expected.
-  echo Continuing to run tunnel-client...
-  echo.
-)
-"%TUNNEL_CLIENT%" run --profile "%PROFILE%" --health.listen-addr "%HEALTH_ADDR%"
+powershell -NoProfile -ExecutionPolicy Bypass -File ".\start-tunnel.local.ps1"
 pause
 "@
-Set-Content -LiteralPath (Join-Path $projectRoot "start-tunnel.local.cmd") -Value $startTunnel -Encoding ASCII
+Set-Content -LiteralPath (Join-Path $projectRoot "start-tunnel.local.cmd") -Value $startTunnelCmd -Encoding ASCII
+
+$startTunnelPs1 = @"
+`$ErrorActionPreference = "Stop"
+Set-Location -LiteralPath `$PSScriptRoot
+
+`$Profile = $profilePs
+`$HealthAddr = $healthPs
+`$TunnelClient = $tunnelPs
+`$ProxyUrl = $proxyPs
+
+if (`$ProxyUrl) {
+  `$env:HTTP_PROXY = `$ProxyUrl
+  `$env:HTTPS_PROXY = `$ProxyUrl
+  `$env:http_proxy = `$ProxyUrl
+  `$env:https_proxy = `$ProxyUrl
+  `$env:ALL_PROXY = `$ProxyUrl
+  `$env:all_proxy = `$ProxyUrl
+}
+`$env:NO_PROXY = "127.0.0.1,localhost,::1"
+`$env:no_proxy = "127.0.0.1,localhost,::1"
+
+if (-not `$env:CONTROL_PLANE_API_KEY) {
+  `$secureKey = Read-Host "Paste CONTROL_PLANE_API_KEY for this session" -AsSecureString
+  `$bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR(`$secureKey)
+  try {
+    `$env:CONTROL_PLANE_API_KEY = [Runtime.InteropServices.Marshal]::PtrToStringBSTR(`$bstr)
+  } finally {
+    if (`$bstr -ne [IntPtr]::Zero) {
+      [Runtime.InteropServices.Marshal]::ZeroFreeBSTR(`$bstr)
+    }
+  }
+}
+
+if (-not `$env:CONTROL_PLANE_API_KEY) {
+  throw "CONTROL_PLANE_API_KEY is empty."
+}
+
+if (-not (Test-Path -LiteralPath `$TunnelClient)) {
+  throw "tunnel-client.exe not found: `$TunnelClient"
+}
+
+& `$TunnelClient doctor --profile `$Profile --explain --health.listen-addr `$HealthAddr
+if (`$LASTEXITCODE -ne 0) {
+  Write-Host ""
+  Write-Host "doctor reported warnings/errors. In No Authentication mode, OAuth metadata warnings may be expected."
+  Write-Host "Continuing to run tunnel-client..."
+  Write-Host ""
+}
+
+& `$TunnelClient run --profile `$Profile --health.listen-addr `$HealthAddr
+"@
+Set-Content -LiteralPath (Join-Path $projectRoot "start-tunnel.local.ps1") -Value $startTunnelPs1 -Encoding UTF8
 
 Write-Host "Created start-mcp.local.cmd"
 Write-Host "Created start-tunnel.local.cmd"
+Write-Host "Created start-tunnel.local.ps1"
 
 if ($InitTunnelProfile) {
   Write-Step "Initialize tunnel profile"

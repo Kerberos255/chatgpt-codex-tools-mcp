@@ -16,5 +16,6 @@ key.txt
 
 start-tunnel.local.cmd
 *.local.cmd
+*.local.ps1
 .DS_Store
 Thumbs.db
