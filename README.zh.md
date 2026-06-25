@@ -165,9 +165,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\init-windows.ps1 `
 示例：
 
 ```cmd
-set "CTM_ALLOWED_ROOTS=E:\codex,E:\openclaw\github_project"
-set "OPENCLAW_NODE_BIN=C:\Tools\openclaw\runtime\node"
-set "CTM_NPM_CACHE=E:\npm-cache"
+set "CTM_ALLOWED_ROOTS=D:\Projects"
+set "NODE_BIN=C:\Tools\nodejs"
+set "CTM_NPM_CACHE=D:\npm-cache"
 start-mcp.cmd
 ```
 
