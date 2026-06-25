@@ -2,6 +2,7 @@ import { homedir } from "node:os";
 import { resolve } from "node:path";
 
 export type AccessMode = "review" | "full";
+export type SearchProvider = "none" | "searxng";
 
 export interface Config {
   host: string;
@@ -11,6 +12,11 @@ export interface Config {
   accessMode: AccessMode;
   maxReadBytes: number;
   maxOutputBytes: number;
+  webToolsEnabled: boolean;
+  searchProvider: SearchProvider;
+  searxngUrl: string;
+  webMaxBytes: number;
+  webTimeoutMs: number;
 }
 
 const defaultDenyGlobs = [
@@ -36,6 +42,11 @@ export function loadConfig(env = process.env): Config {
     accessMode: parseAccessMode(env.CTM_ACCESS_MODE),
     maxReadBytes: parseInteger(env.CTM_MAX_READ_BYTES, 200_000, "CTM_MAX_READ_BYTES"),
     maxOutputBytes: parseInteger(env.CTM_MAX_OUTPUT_BYTES, 200_000, "CTM_MAX_OUTPUT_BYTES"),
+    webToolsEnabled: parseBoolean(env.CTM_WEB_TOOLS),
+    searchProvider: parseSearchProvider(env.CTM_SEARCH_PROVIDER),
+    searxngUrl: env.CTM_SEARXNG_URL || "",
+    webMaxBytes: parseInteger(env.CTM_WEB_MAX_BYTES, 200_000, "CTM_WEB_MAX_BYTES"),
+    webTimeoutMs: parseInteger(env.CTM_WEB_TIMEOUT_MS, 15_000, "CTM_WEB_TIMEOUT_MS"),
   };
 }
 
@@ -43,6 +54,18 @@ function parseAccessMode(value: string | undefined): AccessMode {
   if (!value || value === "review") return "review";
   if (value === "full") return "full";
   throw new Error(`Invalid CTM_ACCESS_MODE: ${value}`);
+}
+
+function parseSearchProvider(value: string | undefined): SearchProvider {
+  if (!value || value === "none") return "none";
+  if (value === "searxng") return "searxng";
+  throw new Error(`Invalid CTM_SEARCH_PROVIDER: ${value}`);
+}
+
+function parseBoolean(value: string | undefined): boolean {
+  if (!value) return false;
+  const normalized = value.toLowerCase();
+  return normalized === "1" || normalized === "true" || normalized === "yes";
 }
 
 function parseInteger(value: string | undefined, fallback: number, name: string): number {

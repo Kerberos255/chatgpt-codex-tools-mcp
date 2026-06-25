@@ -10,6 +10,7 @@ import { loadConfig } from "./config.js";
 import { assertNotDenied, relativeDisplayPath } from "./paths.js";
 import { applyReplacement, PatchStore, previewReplacement } from "./patches.js";
 import { assertCommandAllowed, runCommand } from "./process-runner.js";
+import { webFetch, webSearch, webStatus } from "./web.js";
 import { WorkspaceRegistry } from "./workspaces.js";
 
 const config = loadConfig();
@@ -48,22 +49,23 @@ function createMcpServer(): McpServer {
     {
       name: "chatgpt-codex-tools-mcp",
       title: "ChatGPT Codex Tools",
-      version: "0.1.0",
+      version: "0.2.0",
       description: "Codex-style local workspace tools for ChatGPT. ChatGPT reasons; this server only executes constrained local tools.",
     },
     {
       instructions:
-        "Use these tools like a Codex-style local workspace. Open a workspace once, reuse workspaceId, prefer read/search/git tools for inspection, use patch preview before confirm for edits, use shell preview/confirm for write or publish commands, and run direct shell only for verification or low-risk local commands.",
+        "Use these tools like a Codex-style local workspace. Open a workspace once, reuse workspaceId, prefer read/search/git tools for inspection, use preview_patch before confirm_patch for edits, use preview_shell/confirm_shell for write or publish commands, and run direct shell only for verification or low-risk local commands.",
     },
   );
 
   server.registerTool(
-    "codex_local_status",
+    "local_status",
     {
       title: "Local status",
       description: "Return local server status and safety configuration.",
       inputSchema: {},
       annotations: { readOnlyHint: true },
+      outputSchema: z.object({ result: z.string() }),
     },
     async () => textResult(JSON.stringify({
       ok: true,
@@ -72,11 +74,16 @@ function createMcpServer(): McpServer {
       allowedRoots: config.allowedRoots,
       maxReadBytes: config.maxReadBytes,
       maxOutputBytes: config.maxOutputBytes,
+      webToolsEnabled: config.webToolsEnabled,
+      searchProvider: config.searchProvider,
+      searxngConfigured: Boolean(config.searxngUrl),
+      webMaxBytes: config.webMaxBytes,
+      webTimeoutMs: config.webTimeoutMs,
     }, null, 2)),
   );
 
   server.registerTool(
-    "codex_workspace_open",
+    "open_workspace",
     {
       title: "Open workspace",
       description: "Open a local project directory under CTM_ALLOWED_ROOTS and return a workspaceId.",
@@ -84,6 +91,7 @@ function createMcpServer(): McpServer {
         path: z.string().describe("Absolute path to a local project directory inside an allowed root."),
       },
       annotations: { readOnlyHint: true },
+      outputSchema: z.object({ result: z.string(), workspaceId: z.string(), root: z.string() }),
     },
     async ({ path }) => {
       const workspace = await workspaces.open(path);
@@ -95,7 +103,7 @@ function createMcpServer(): McpServer {
   );
 
   server.registerTool(
-    "codex_list_dir",
+    "list_dir",
     {
       title: "List directory",
       description: "List a directory inside an open workspace.",
@@ -104,6 +112,7 @@ function createMcpServer(): McpServer {
         path: z.string().default("."),
       },
       annotations: { readOnlyHint: true },
+      outputSchema: z.object({ result: z.string() }),
     },
     async ({ workspaceId, path }) => {
       const { workspace, absolutePath } = workspaces.resolve(workspaceId, path);
@@ -118,7 +127,7 @@ function createMcpServer(): McpServer {
   );
 
   server.registerTool(
-    "codex_read_file",
+    "read_file",
     {
       title: "Read file",
       description: "Read a UTF-8 text file inside an open workspace. Output is byte capped.",
@@ -127,6 +136,7 @@ function createMcpServer(): McpServer {
         path: z.string(),
       },
       annotations: { readOnlyHint: true },
+      outputSchema: z.object({ result: z.string(), path: z.string(), truncated: z.boolean() }),
     },
     async ({ workspaceId, path }) => {
       const { workspace, absolutePath } = workspaces.resolve(workspaceId, path);
@@ -140,7 +150,7 @@ function createMcpServer(): McpServer {
   );
 
   server.registerTool(
-    "codex_search_files",
+    "search_files",
     {
       title: "Search files",
       description: "Search text inside a workspace without requiring rg. Skips node_modules, dist, .git, and denied paths.",
@@ -150,6 +160,7 @@ function createMcpServer(): McpServer {
         path: z.string().default("."),
       },
       annotations: { readOnlyHint: true },
+      outputSchema: z.object({ result: z.string() }),
     },
     async ({ workspaceId, pattern, path }) => {
       const { workspace, absolutePath } = workspaces.resolve(workspaceId, path);
@@ -160,32 +171,34 @@ function createMcpServer(): McpServer {
   );
 
   server.registerTool(
-    "codex_git_status",
+    "git_status",
     {
       title: "Git status",
       description: "Run git status --short inside a workspace.",
       inputSchema: { workspaceId: z.string() },
       annotations: { readOnlyHint: true },
+      outputSchema: z.object({ result: z.string(), stdout: z.string(), stderr: z.string(), exitCode: z.number().nullable(), timedOut: z.boolean() }),
     },
     async ({ workspaceId }) => gitTool(workspaceId, "git status --short"),
   );
 
   server.registerTool(
-    "codex_git_diff",
+    "git_diff",
     {
       title: "Git diff",
       description: "Run git diff --stat and git diff inside a workspace.",
       inputSchema: { workspaceId: z.string() },
       annotations: { readOnlyHint: true },
+      outputSchema: z.object({ result: z.string(), stdout: z.string(), stderr: z.string(), exitCode: z.number().nullable(), timedOut: z.boolean() }),
     },
     async ({ workspaceId }) => gitTool(workspaceId, "git diff --stat && git diff"),
   );
 
   server.registerTool(
-    "codex_apply_patch_preview",
+    "preview_patch",
     {
       title: "Preview patch",
-      description: "Create a pending replacement patch. Does not write until codex_apply_patch_confirm is called.",
+      description: "Create a pending replacement patch. Does not write until confirm_patch is called.",
       inputSchema: {
         workspaceId: z.string(),
         path: z.string(),
@@ -193,6 +206,7 @@ function createMcpServer(): McpServer {
         newText: z.string(),
       },
       annotations: { readOnlyHint: false, destructiveHint: false },
+      outputSchema: z.object({ result: z.string(), action_id: z.string(), requires_approval: z.boolean(), path: z.string(), diff: z.string() }),
     },
     async ({ workspaceId, path, oldText, newText }) => {
       const { workspace, absolutePath } = workspaces.resolve(workspaceId, path);
@@ -209,14 +223,15 @@ function createMcpServer(): McpServer {
   );
 
   server.registerTool(
-    "codex_apply_patch_confirm",
+    "confirm_patch",
     {
       title: "Confirm patch",
-      description: "Apply a pending patch created by codex_apply_patch_preview.",
+      description: "Apply a pending patch created by preview_patch.",
       inputSchema: {
         actionId: z.string(),
       },
       annotations: { readOnlyHint: false, destructiveHint: true },
+      outputSchema: z.object({ result: z.string(), applied: z.boolean(), action_id: z.string(), path: z.string() }),
     },
     async ({ actionId }) => {
       const pending = patches.take(actionId);
@@ -232,10 +247,10 @@ function createMcpServer(): McpServer {
   );
 
   server.registerTool(
-    "codex_shell_preview",
+    "preview_shell",
     {
       title: "Preview shell command",
-      description: "Create a pending shell action for review-mode write or publish commands. Does not execute until codex_shell_confirm is called.",
+      description: "Create a pending shell action for review-mode write or publish commands. Does not execute until confirm_shell is called.",
       inputSchema: {
         workspaceId: z.string(),
         command: z.string(),
@@ -243,6 +258,7 @@ function createMcpServer(): McpServer {
         timeoutSeconds: z.number().int().positive().max(300).default(30),
       },
       annotations: { readOnlyHint: false, destructiveHint: false },
+      outputSchema: z.object({ result: z.string(), action_id: z.string(), requires_approval: z.boolean(), workspaceId: z.string(), workingDirectory: z.string(), command: z.string(), timeoutSeconds: z.number() }),
     },
     async ({ workspaceId, command, workingDirectory, timeoutSeconds }) => {
       const { absolutePath } = workspaces.resolve(workspaceId, workingDirectory);
@@ -259,7 +275,7 @@ function createMcpServer(): McpServer {
           "command:",
           command,
           "",
-          "This command has not been executed. Call codex_shell_confirm with this actionId to run it.",
+          "This command has not been executed. Call confirm_shell with this actionId to run it.",
         ].join("\n"),
         {
           action_id: pending.id,
@@ -274,14 +290,15 @@ function createMcpServer(): McpServer {
   );
 
   server.registerTool(
-    "codex_shell_confirm",
+    "confirm_shell",
     {
       title: "Confirm shell command",
-      description: "Execute a pending shell action created by codex_shell_preview.",
+      description: "Execute a pending shell action created by preview_shell.",
       inputSchema: {
         actionId: z.string(),
       },
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
+      outputSchema: z.object({ result: z.string(), stdout: z.string(), stderr: z.string(), exitCode: z.number().nullable(), timedOut: z.boolean() }),
     },
     async ({ actionId }) => {
       const pending = shellActions.take(actionId);
@@ -300,7 +317,7 @@ function createMcpServer(): McpServer {
   );
 
   server.registerTool(
-    "codex_shell",
+    "shell",
     {
       title: "Shell",
       description: "Run a shell command inside a workspace. Review mode blocks risky commands and allows only low-risk inspection/test commands.",
@@ -311,6 +328,7 @@ function createMcpServer(): McpServer {
         timeoutSeconds: z.number().int().positive().max(300).default(30),
       },
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
+      outputSchema: z.object({ result: z.string(), stdout: z.string(), stderr: z.string(), exitCode: z.number().nullable(), timedOut: z.boolean() }),
     },
     async ({ workspaceId, command, workingDirectory, timeoutSeconds }) => {
       const { workspace, absolutePath } = workspaces.resolve(workspaceId, workingDirectory);
@@ -326,6 +344,70 @@ function createMcpServer(): McpServer {
       return textResult(formatProcessResult(result), result);
     },
   );
+
+  // ---- web tools ----
+
+  // web_status is always registered so ChatGPT can discover the web tools config
+  server.registerTool(
+    "web_status",
+    {
+      title: "Web status",
+      description: "Show web tools configuration status.",
+      inputSchema: {},
+      annotations: { readOnlyHint: true },
+      outputSchema: z.object({ result: z.string() }),
+    },
+    async () => textResult(JSON.stringify(webStatus(config), null, 2)),
+  );
+
+  if (config.webToolsEnabled) {
+    server.registerTool(
+      "web_search",
+      {
+        title: "Web search",
+        description: "Search the web via the configured search provider (SearXNG). Only available when CTM_WEB_TOOLS=1 and CTM_SEARCH_PROVIDER=searxng.",
+        inputSchema: {
+          query: z.string().describe("Search query."),
+          limit: z.number().int().min(1).max(10).default(5).describe("Number of results."),
+        },
+        annotations: { readOnlyHint: true },
+        outputSchema: z.object({ result: z.string(), results: z.array(z.object({ title: z.string(), url: z.string(), snippet: z.string(), engine: z.string().optional() })) }),
+      },
+      async ({ query, limit }) => {
+        const results = await webSearch(config, query, limit);
+        return textResult(
+          results.length === 0 ? "(no results)" : results.map((r) => `- ${r.title}\n  ${r.url}\n  ${r.snippet}`).join("\n\n"),
+          { results },
+        );
+      },
+    );
+
+    server.registerTool(
+      "web_fetch",
+      {
+        title: "Web fetch",
+        description: "Fetch a public HTTP(S) page. Blocks localhost, private networks, and credentials in URLs. No cookies or auth headers are sent.",
+        inputSchema: {
+          url: z.string().url().describe("HTTP or HTTPS URL."),
+        },
+        annotations: { readOnlyHint: true },
+        outputSchema: z.object({ result: z.string(), finalUrl: z.string(), status: z.number(), contentType: z.string(), title: z.string(), text: z.string(), truncated: z.boolean() }),
+      },
+      async ({ url }) => {
+        const result = await webFetch(config, url);
+        return textResult(
+          [
+            `final_url: ${result.finalUrl}`,
+            `status: ${result.status}`,
+            `content_type: ${result.contentType}`,
+            result.truncated ? "[output truncated]\n" : "",
+            result.text.slice(0, config.maxReadBytes),
+          ].filter(Boolean).join("\n"),
+          result,
+        );
+      },
+    );
+  }
 
   return server;
 }

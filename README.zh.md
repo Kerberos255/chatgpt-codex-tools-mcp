@@ -30,6 +30,7 @@ ChatGPT 负责思考和写方案，这个 MCP server 负责受限制地读文件
 - Patch 预览 + 确认流程。
 - `review` 模式 shell 白名单，只允许低风险验证命令。
 - Windows 辅助脚本，可复用 Codex 自带的 Node 运行时。
+- 可选 web 工具（默认关闭）：SearXNG 搜索、HTTP 页面抓取。
 
 ---
 
@@ -37,18 +38,23 @@ ChatGPT 负责思考和写方案，这个 MCP server 负责受限制地读文件
 
 | 工具 | 用途 |
 | --- | --- |
-| `codex_local_status` | 显示服务器状态、访问模式、允许路径、容量限制。 |
-| `codex_workspace_open` | 打开 `CTM_ALLOWED_ROOTS` 下的项目文件夹。 |
-| `codex_list_dir` | 列出打开的工作区文件。 |
-| `codex_read_file` | 读取 UTF-8 文本文件（带输出上限）。 |
-| `codex_search_files` | 在工作区搜索文本。 |
-| `codex_git_status` | 运行 `git status --short`。 |
-| `codex_git_diff` | 运行 `git diff --stat` 和 `git diff`。 |
-| `codex_apply_patch_preview` | 创建待应用的替换 patch。 |
-| `codex_apply_patch_confirm` | 按 action id 确认应用 patch。 |
-| `codex_shell_preview` | 创建待执行的 shell 操作。 |
-| `codex_shell_confirm` | 确认执行 shell 操作。 |
-| `codex_shell` | 运行本地命令（受 `CTM_ACCESS_MODE` 限制）。 |
+| `local_status` | 显示服务器状态、访问模式、允许路径、容量限制及 web tools 配置。 |
+| `open_workspace` | 打开 `CTM_ALLOWED_ROOTS` 下的项目文件夹。 |
+| `list_dir` | 列出打开的工作区文件。 |
+| `read_file` | 读取 UTF-8 文本文件（带输出上限）。 |
+| `search_files` | 在工作区搜索文本。 |
+| `git_status` | 运行 `git status --short`。 |
+| `git_diff` | 运行 `git diff --stat` 和 `git diff`。 |
+| `preview_patch` | 创建待应用的替换 patch。 |
+| `confirm_patch` | 按 action id 确认应用 patch。 |
+| `preview_shell` | 创建待执行的 shell 操作。 |
+| `confirm_shell` | 确认执行 shell 操作。 |
+| `shell` | 运行本地命令（受 `CTM_ACCESS_MODE` 限制）。 |
+| `web_status` | 显示 web tools 配置。始终可用。 |
+| `web_search` * | 通过 SearXNG 搜索网络。需 `CTM_WEB_TOOLS=1` 和 `CTM_SEARCH_PROVIDER=searxng`。 |
+| `web_fetch` * | 获取公开 HTTP(S) 页面。阻止本机/内网地址和凭据。需 `CTM_WEB_TOOLS=1`。 |
+
+\* _可选工具，默认关闭，需 `CTM_WEB_TOOLS=1` 启用。_
 
 ---
 
@@ -73,7 +79,7 @@ CTM_ACCESS_MODE=review
 
 `review` 模式会拦截危险命令，只允许 `git status`、`git diff`、`dir`、`ls`、`node --version`、`npm run ...` 等低风险检测命令。
 
-写入 git 或发布到远程的命令（如 `git add`、`git commit`、`git push`、`gh repo create`）在 `review` 模式下不允许直接执行，需要通过 `codex_shell_preview` 先创建待执行操作，再通过 `codex_shell_confirm` 确认执行。
+写入 git 或发布到远程的命令（如 `git add`、`git commit`、`git push`、`gh repo create`）在 `review` 模式下不允许直接执行，需要通过 `preview_shell` 先创建待执行操作，再通过 `confirm_shell` 确认执行。
 
 ---
 
@@ -261,6 +267,11 @@ MCP 地址：http://127.0.0.1:3333/mcp（通过 tunnel profile）
 | `CTM_DENY_GLOBS` | 内置拒绝列表 | 逗号分隔的屏蔽规则。 |
 | `CTM_MAX_READ_BYTES` | `200000` | 文件读取最大字节数。 |
 | `CTM_MAX_OUTPUT_BYTES` | `200000` | shell/git 输出最大字节数。 |
+| `CTM_WEB_TOOLS` | (未设置) | 设为 `1` 启用可选 web 工具（`web_search`、`web_fetch`）。`web_status` 始终可用，不受此设置影响。 |
+| `CTM_SEARCH_PROVIDER` | `none` | `none` 或 `searxng`。需 `CTM_WEB_TOOLS=1`。 |
+| `CTM_SEARXNG_URL` | (无) | SearXNG 实例地址。`CTM_SEARCH_PROVIDER=searxng` 时必须设置。 |
+| `CTM_WEB_MAX_BYTES` | `200000` | web_fetch 返回最大字节数。 |
+| `CTM_WEB_TIMEOUT_MS` | `15000` | 每个 web 请求的超时时间。 |
 
 `env.example` 包含一个示例配置。复制后本地修改，不要发布自己的环境文件。
 

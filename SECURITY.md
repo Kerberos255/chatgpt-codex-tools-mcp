@@ -20,6 +20,17 @@ This project is intended for personal, local use with a private MCP tunnel. It i
 - Do not publish local private files, logs, or workspace data.
 - Do not switch to `CTM_ACCESS_MODE=full` unless you fully understand the risks.
 
+## Optional web tools
+
+When enabled (`CTM_WEB_TOOLS=1`), two extra tools are available: `web_search` and `web_fetch`. `web_status` is always available regardless of this setting.
+
+They are disabled by default and must be explicitly opted into:
+
+- `web_search` only queries the configured SearXNG instance (`CTM_SEARXNG_URL`). It does not contact any other search provider.
+- `web_fetch` blocks localhost, private network addresses (RFC 1918, IPv6 private/ULA/link-local), and URLs with embedded credentials. Redirect targets are rechecked before each hop.
+- Neither tool sends cookies, Authorization headers, browser login state, or client certificates.
+- Both tools are subject to `CTM_WEB_MAX_BYTES` and `CTM_WEB_TIMEOUT_MS` limits.
+
 ---
 
 # 安全策略
@@ -43,3 +54,12 @@ This project is intended for personal, local use with a private MCP tunnel. It i
 - 不要把 `CTM_ALLOWED_ROOTS` 设置成整个系统盘，比如 `C:\` 或 `/`。
 - 不要发布本机私人文件、日志或工作区数据。
 - 不理解风险时不要切换到 `CTM_ACCESS_MODE=full`。
+
+## 可选 web 工具的安全边界
+
+启用 `CTM_WEB_TOOLS=1` 后，会额外暴露 `web_search`、`web_fetch` 两个工具。`web_status` 始终可用，不受此设置影响。默认关闭，需明确启用。
+
+- `web_search` 只访问配置的 SearXNG 实例（`CTM_SEARXNG_URL`），不联系其他搜索服务。
+- `web_fetch` 阻止 localhost、内网地址（RFC 1918、IPv6 私有/ULA/链路本地）以及带凭据的 URL。重定向目标在每次跳转前重新检查。
+- 两个工具都不发送 cookie、Authorization 头、浏览器登录态或客户端证书。
+- 受 `CTM_WEB_MAX_BYTES` 和 `CTM_WEB_TIMEOUT_MS` 限制。

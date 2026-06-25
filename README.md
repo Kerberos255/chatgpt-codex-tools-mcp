@@ -39,6 +39,7 @@ The default public template uses **No Authentication** at the MCP app layer. Thi
 - Patch preview + confirm flow for edits.
 - `review` mode shell allowlist for low-risk verification commands.
 - Windows-friendly helper script that can reuse Codex's bundled Node runtime if present.
+- Optional web tools (disabled by default): SearXNG search and public HTTP fetch.
 
 ---
 
@@ -46,18 +47,23 @@ The default public template uses **No Authentication** at the MCP app layer. Thi
 
 | Tool | Purpose |
 | --- | --- |
-| `codex_local_status` | Show server status, access mode, allowed roots, and caps. |
-| `codex_workspace_open` | Open a local project folder under `CTM_ALLOWED_ROOTS`. |
-| `codex_list_dir` | List files in an open workspace. |
-| `codex_read_file` | Read a UTF-8 text file with output caps. |
-| `codex_search_files` | Search text in a workspace without requiring ripgrep. |
-| `codex_git_status` | Run `git status --short`. |
-| `codex_git_diff` | Run `git diff --stat` and `git diff`. |
-| `codex_apply_patch_preview` | Create a pending replacement patch. |
-| `codex_apply_patch_confirm` | Apply a pending patch by action id. |
-| `codex_shell_preview` | Create a pending shell action for write/publish commands. |
-| `codex_shell_confirm` | Execute a pending shell action after explicit confirmation. |
-| `codex_shell` | Run a local command, restricted by `CTM_ACCESS_MODE`. |
+| `local_status` | Show server status, access mode, allowed roots, caps, and web tools config. |
+| `open_workspace` | Open a local project folder under `CTM_ALLOWED_ROOTS`. |
+| `list_dir` | List files in an open workspace. |
+| `read_file` | Read a UTF-8 text file with output caps. |
+| `search_files` | Search text in a workspace without requiring ripgrep. |
+| `git_status` | Run `git status --short`. |
+| `git_diff` | Run `git diff --stat` and `git diff`. |
+| `preview_patch` | Create a pending replacement patch. |
+| `confirm_patch` | Apply a pending patch by action id. |
+| `preview_shell` | Create a pending shell action for write/publish commands. |
+| `confirm_shell` | Execute a pending shell action after explicit confirmation. |
+| `shell` | Run a local command, restricted by `CTM_ACCESS_MODE`. |
+| `web_status` | Show web tools configuration. Always available. |
+| `web_search` * | Search the web via SearXNG. Requires `CTM_WEB_TOOLS=1` and `CTM_SEARCH_PROVIDER=searxng`. |
+| `web_fetch` * | Fetch a public HTTP(S) page. Blocks localhost, private networks, and credentials. Requires `CTM_WEB_TOOLS=1`. |
+
+\* _Optional tools, disabled by default unless `CTM_WEB_TOOLS=1`._
 
 ---
 
@@ -82,7 +88,7 @@ Important rules:
 
 `review` mode blocks dangerous command patterns and only allows a small set of inspection/test commands such as `git status`, `git diff`, `dir`, `ls`, `node --version`, and `npm run ...`.
 
-Commands that write to git history or publish to a remote, such as `git add`, `git commit`, `git remote`, `git push`, and `gh repo create`, are not allowed through direct shell in `review` mode. They must go through `codex_shell_preview` first and then `codex_shell_confirm` with the returned action id.
+Commands that write to git history or publish to a remote, such as `git add`, `git commit`, `git remote`, `git push`, and `gh repo create`, are not allowed through direct shell in `review` mode. They must go through `preview_shell` first and then `confirm_shell` with the returned action id.
 
 ---
 
@@ -284,6 +290,11 @@ Some tunnel doctor tools may still warn about OAuth metadata. For this No Auth t
 | `CTM_DENY_GLOBS` | built-in deny list | Comma-separated deny rules. |
 | `CTM_MAX_READ_BYTES` | `200000` | Max bytes returned by file reads. |
 | `CTM_MAX_OUTPUT_BYTES` | `200000` | Max bytes returned by shell/git output. |
+| `CTM_WEB_TOOLS` | (not set) | Set to `1` to enable optional web tools (`web_search`, `web_fetch`). `web_status` is always available regardless of this setting. |
+| `CTM_SEARCH_PROVIDER` | `none` | `none` or `searxng`. Requires `CTM_WEB_TOOLS=1`. |
+| `CTM_SEARXNG_URL` | (none) | SearXNG instance URL. Required when `CTM_SEARCH_PROVIDER=searxng`. |
+| `CTM_WEB_MAX_BYTES` | `200000` | Max bytes returned by web_fetch. |
+| `CTM_WEB_TIMEOUT_MS` | `15000` | Timeout for each web request. |
 
 `env.example` contains a starter configuration. Copy it and adapt it locally, but do not publish your local environment file.
 

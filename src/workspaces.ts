@@ -24,7 +24,7 @@ export class WorkspaceRegistry {
 
   get(workspaceId: string): Workspace {
     const workspace = this.workspaces.get(workspaceId);
-    if (!workspace) throw new Error(`Unknown workspaceId: ${workspaceId}. Call codex_workspace_open first.`);
+    if (!workspace) throw new Error(`Unknown workspaceId: ${workspaceId}. Call open_workspace first.`);
     return workspace;
   }
 
