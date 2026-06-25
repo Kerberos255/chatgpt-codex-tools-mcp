@@ -1,3 +1,5 @@
+[中文](./README.zh.md) | English
+
 # chatgpt-codex-tools-mcp
 
 Codex-style local workspace tools exposed to ChatGPT through MCP.
@@ -193,7 +195,7 @@ Useful environment variables:
 | `CTM_ACCESS_MODE` | `review` or `full`. Default: `review`. |
 | `PORT` | Local HTTP port. Default: `3333`. |
 | `OPENCLAW_NODE_BIN` | Optional folder containing `node.exe`. |
-| `CTM_NPM_CACHE` | Optional npm cache folder, useful when C: drive is small. |
+| `CTM_NPM_CACHE` | Optional npm cache folder location. |
 
 Example:
 
@@ -290,132 +292,3 @@ Run:
 npm install
 npm run build
 ```
-
----
-
-# 中文说明
-
-`chatgpt-codex-tools-mcp` 是一个本地 HTTP MCP server，用来把一组类似 Codex 的本地项目工具暴露给 ChatGPT。
-
-简单理解：
-
-```text
-ChatGPT 负责思考和写方案
-这个 MCP server 负责受限制地读文件、看 git、预览修改、确认修改、跑少量低风险命令
-```
-
-它不是 Codex 官方客户端，也不会调用 Codex agent。它只是一个本地工具层，让 ChatGPT 能像使用一个小型 Codex 工具箱一样操作你允许的工作区。
-
----
-
-## 适合谁
-
-适合这些场景：
-
-- 你想让 ChatGPT 看本地项目代码。
-- 你想让 ChatGPT 帮你改文件，但希望先 preview 再确认。
-- 你不想把本地 MCP server 暴露到公网。
-- 你想通过私有 MCP tunnel 让 ChatGPT 连接本机。
-- 你想限制 ChatGPT 只能访问指定目录。
-
----
-
-## 默认安全边界
-
-默认配置：
-
-```text
-HOST=127.0.0.1
-PORT=3333
-CTM_ACCESS_MODE=review
-```
-
-建议保持：
-
-- 只绑定 `127.0.0.1`。
-- `CTM_ALLOWED_ROOTS` 只写你真正想让 ChatGPT 操作的项目目录。
-- 不要写整个 C 盘、整个 E 盘或系统根目录。
-- 默认用 `review` 模式。
-- ChatGPT 创建连接器时选择 **未授权 / No Authentication**。
-- 只通过私有 tunnel 使用，不要直接公开 HTTP 地址。
-
----
-
-## 安装和启动
-
-```bash
-git clone https://github.com/Kerberos255/chatgpt-codex-tools-mcp.git
-cd chatgpt-codex-tools-mcp
-npm install
-npm run build
-```
-
-Windows PowerShell 示例：
-
-```powershell
-$env:CTM_ALLOWED_ROOTS = "D:\Projects"
-$env:CTM_ACCESS_MODE = "review"
-node dist/server.js
-```
-
-Windows 也可以双击：
-
-```text
-start-mcp.cmd
-```
-
-如果你使用 OpenClaw 自带 Node，可以先设置：
-
-```cmd
-set "OPENCLAW_NODE_BIN=E:\openclaw\runtime\node"
-```
-
-如果 C 盘空间紧张，可以把 npm cache 放到 E 盘：
-
-```cmd
-set "CTM_NPM_CACHE=E:\npm-cache"
-```
-
----
-
-## ChatGPT 连接器设置
-
-ChatGPT 要连到本机 MCP，需要先准备 OpenAI Secure MCP Tunnel。也就是说，除了这个 MCP server，还需要安装并运行 OpenAI 的 `tunnel-client`。
-
-Windows 第一次使用可以运行：
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\init-windows.ps1 -AllowedRoots "D:\Projects" -OpenTunnelDownloadPages
-```
-
-这个脚本会帮你构建项目、配置允许访问的目录，并检查 tunnel-client 是否已经放好。
-
-创建 ChatGPT 自定义连接器时，核心选项是：
-
-```text
-连接类型：Tunnel
-身份验证：未授权 / No Authentication
-本地 MCP 地址：http://127.0.0.1:3333/mcp
-```
-
-README 不放截图是有意的：ChatGPT UI 可能变，文字步骤更不容易过期，也更不容易泄露本机 tunnel 名称或账号信息。
-
----
-
-## 常见问题
-
-### `/mcp` 返回 400 是不是坏了？
-
-不是。裸访问 `/mcp` 返回 `No valid MCP session` 很正常，说明 server 活着，但你没有发 MCP 初始化请求。
-
-### 为什么不用 OAuth？
-
-这个公开模板默认给个人本机 + 私有 tunnel 使用，所以用 No Auth 更简单。安全边界来自 localhost、私有 tunnel、allowed roots、deny rules、review mode。多人或生产环境请自行加认证。
-
-### 我能不能设成 full 模式？
-
-可以，但不建议。`full` 意味着 shell 限制会少很多。除非你完全信任本地环境和调用方，否则保持 `review`。
-
-### 可以上传截图吗？
-
-可以，但第一版建议不放。文字说明已经够用，而且截图容易过期。
