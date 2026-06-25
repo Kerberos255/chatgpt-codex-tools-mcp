@@ -169,7 +169,7 @@ start-tunnel.local.cmd
 start-tunnel.local.ps1
 ```
 
-These files are intentionally not committed to git because they contain machine-specific paths and settings. The initializer does **not** save your runtime key. When the tunnel starts, it uses `CONTROL_PLANE_API_KEY` from the current environment if present; otherwise it asks for it with a hidden PowerShell prompt.
+The initializer does **not** save your runtime key. When the tunnel starts, it uses `CONTROL_PLANE_API_KEY` from the current environment if present; otherwise it asks for it with a hidden PowerShell prompt.
 
 If `tunnel-client.exe` is missing, the initializer opens the download pages and shows the recommended local path. Download it, place it there, rerun `init-windows.cmd`, then run `start-all.cmd`.
 
@@ -237,8 +237,9 @@ This project is meant to stay local. If ChatGPT needs to reach it, use OpenAI Se
 Tunnel prerequisites:
 
 1. Create or choose a tunnel in OpenAI Platform tunnel settings.
-2. Download `tunnel-client` from OpenAI Platform tunnel settings or from the latest `openai/tunnel-client` release.
-3. Keep the tunnel client running while testing from ChatGPT.
+2. Copy the tunnel id and runtime key from the tunnel details page. The tunnel startup script will ask for the runtime key when needed.
+3. Download `tunnel-client` from OpenAI Platform tunnel settings or from the latest `openai/tunnel-client` release.
+4. Keep the tunnel client running while testing from ChatGPT.
 
 High-level tunnel setup:
 

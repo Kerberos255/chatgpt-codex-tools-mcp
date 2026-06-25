@@ -156,7 +156,7 @@ start-tunnel.local.cmd
 start-tunnel.local.ps1
 ```
 
-这些文件不会提交到仓库，因为它们包含本机路径和配置。初始化脚本不会保存 runtime key。启动 tunnel 时，如果当前环境有 `CONTROL_PLANE_API_KEY` 就直接使用；否则会用隐藏 PowerShell 输入提示临时输入。
+初始化脚本不会保存 runtime key。启动 tunnel 时，如果当前环境有 `CONTROL_PLANE_API_KEY` 就直接使用；否则会用隐藏 PowerShell 输入提示临时输入。
 
 如果缺少 `tunnel-client.exe`，初始化脚本会打开下载页面并提示推荐放置路径。下载后放到提示的位置，重新运行 `init-windows.cmd`，然后再运行 `start-all.cmd`。
 
@@ -217,8 +217,9 @@ start-mcp.cmd
 
 Tunnel 前提条件：
 1. 在 OpenAI Platform tunnel 设置中创建或选择一个 tunnel。
-2. 下载 `tunnel-client`（从 OpenAI Platform tunnel 设置或 `openai/tunnel-client` 发布页）。
-3. 从 ChatGPT 测试时保持 tunnel client 运行。
+2. 在 tunnel 详情页复制 tunnel id 和 runtime key。启动 tunnel 时脚本会在需要时询问 runtime key。
+3. 下载 `tunnel-client`（从 OpenAI Platform tunnel 设置或 `openai/tunnel-client` 发布页）。
+4. 从 ChatGPT 测试时保持 tunnel client 运行。
 
 本地 MCP server 地址：
 

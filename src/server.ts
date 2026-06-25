@@ -242,7 +242,7 @@ function createMcpServer(): McpServer {
         workingDirectory: z.string().default("."),
         timeoutSeconds: z.number().int().positive().max(300).default(30),
       },
-      annotations: { readOnlyHint: true, destructiveHint: false },
+      annotations: { readOnlyHint: false, destructiveHint: false },
     },
     async ({ workspaceId, command, workingDirectory, timeoutSeconds }) => {
       const { absolutePath } = workspaces.resolve(workspaceId, workingDirectory);

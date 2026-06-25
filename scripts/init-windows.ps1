@@ -50,7 +50,7 @@ $defaultTunnelClient = Join-Path $projectRoot "tools\tunnel-client\tunnel-client
 if (-not $TunnelClientPath) {
   if ($env:TUNNEL_CLIENT) {
     $TunnelClientPath = $env:TUNNEL_CLIENT
-  } elseif (Test-Path -LiteralPath $defaultTunnelClient) {
+  } else {
     $TunnelClientPath = $defaultTunnelClient
   }
 }
@@ -59,8 +59,8 @@ if (-not $TunnelClientPath -or -not (Test-Path -LiteralPath $TunnelClientPath)) 
   New-Item -ItemType Directory -Force -Path (Split-Path -Parent $defaultTunnelClient) | Out-Null
   Write-Host "tunnel-client.exe was not found."
   Write-Host "Recommended local path: $defaultTunnelClient"
-  Write-Host "Download it from OpenAI Platform tunnel settings or the latest openai/tunnel-client release, then rerun this script with:"
-  Write-Host "  -TunnelClientPath `"$defaultTunnelClient`""
+  Write-Host "Download it from OpenAI Platform tunnel settings or the latest openai/tunnel-client release."
+  Write-Host "After downloading, place tunnel-client.exe at the recommended path and rerun init-windows.cmd."
   if ($OpenTunnelDownloadPages) {
     Start-Process "https://platform.openai.com/settings/organization/tunnels"
     Start-Process "https://github.com/openai/tunnel-client/releases/latest"
