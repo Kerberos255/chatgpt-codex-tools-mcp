@@ -29,8 +29,10 @@ ChatGPT 负责思考和写方案，这个 MCP server 负责受限制地读文件
 - Git status/diff 工具。
 - Patch 预览 + 确认流程。
 - `review` 模式 shell 白名单，只允许低风险验证命令。
+- 工具输出会做尽力而为的敏感值脱敏。
 - Windows 辅助脚本，可复用 Codex 自带的 Node 运行时。
 - 可选 web 工具（默认关闭）：SearXNG 搜索、HTTP 页面抓取。
+- 可选 SQLite/OpenClaw cron 工具（默认关闭）：白名单数据库只读查询，以及 cron 任务 preview/confirm 修改。
 
 ---
 
@@ -50,11 +52,18 @@ ChatGPT 负责思考和写方案，这个 MCP server 负责受限制地读文件
 | `preview_shell` | 创建待执行的 shell 操作。 |
 | `confirm_shell` | 确认执行 shell 操作。 |
 | `shell` | 运行本地命令（受 `CTM_ACCESS_MODE` 限制）。 |
+| `sqlite_status` | 显示 SQLite 工具配置。始终可用。 |
+| `sqlite_schema` * | 查看白名单 SQLite 数据库 schema。需 `CTM_SQLITE_TOOLS=1`。 |
+| `sqlite_select` * | 对白名单 SQLite 数据库执行单条只读 `SELECT`/`WITH` 或安全 `PRAGMA`。需 `CTM_SQLITE_TOOLS=1`。 |
+| `cron_list_jobs` * | 从白名单 OpenClaw cron SQLite 数据库列出任务。需 `CTM_SQLITE_TOOLS=1`。 |
+| `cron_get_job` * | 读取单个 OpenClaw cron 任务。需 `CTM_SQLITE_TOOLS=1`。 |
+| `cron_preview_update_job` * | 预览单个 OpenClaw cron 任务修改。需 `CTM_SQLITE_TOOLS=1`。 |
+| `cron_confirm_update_job` * | 按 action id 应用已预览的 cron 修改。需 `CTM_SQLITE_TOOLS=1`。 |
 | `web_status` | 显示 web tools 配置。始终可用。 |
 | `web_search` * | 通过 SearXNG 搜索网络。需 `CTM_WEB_TOOLS=1` 和 `CTM_SEARCH_PROVIDER=searxng`。 |
 | `web_fetch` * | 获取公开 HTTP(S) 页面。阻止本机/内网地址和凭据。需 `CTM_WEB_TOOLS=1`。 |
 
-\* _可选工具，默认关闭，需 `CTM_WEB_TOOLS=1` 启用。_
+\* _可选工具，默认关闭，需开启对应 feature flag。_
 
 ---
 
@@ -76,6 +85,7 @@ CTM_ACCESS_MODE=review
 - 不要设置到整个盘或系统根目录。
 - 通过私有 tunnel 使用，不要公开 HTTP 地址。
 - ChatGPT 创建连接器时选择 **No Authentication / 未授权**。
+- 输出脱敏只是兜底，不应替代较窄的 `CTM_ALLOWED_ROOTS`、deny rules 和 SQLite 白名单。
 
 `review` 模式会拦截危险命令，只允许 `git status`、`git diff`、`dir`、`ls`、`node --version`、`npm run ...` 等低风险检测命令。
 
@@ -89,6 +99,7 @@ CTM_ACCESS_MODE=review
 - npm
 - ChatGPT 自定义连接器（支持连接 MCP server）
 - 如需 ChatGPT 连接本机，还需要 OpenAI `tunnel-client`
+- 可选 SQLite 工具需要支持 `node:sqlite` 的 Node.js 运行时；建议 Node.js 24+。
 
 Windows 辅助脚本查找 Node 的顺序：
 1. Codex 自带的 Node 运行时（`%LOCALAPPDATA%\OpenAI\Codex\runtimes\cua_node`）
@@ -272,8 +283,35 @@ MCP 地址：http://127.0.0.1:3333/mcp（通过 tunnel profile）
 | `CTM_SEARXNG_URL` | (无) | SearXNG 实例地址。`CTM_SEARCH_PROVIDER=searxng` 时必须设置。 |
 | `CTM_WEB_MAX_BYTES` | `200000` | web_fetch 返回最大字节数。 |
 | `CTM_WEB_TIMEOUT_MS` | `15000` | 每个 web 请求的超时时间。 |
+| `CTM_SQLITE_TOOLS` | (未设置) | 设为 `1` 启用可选 SQLite 和 cron 工具。 |
+| `CTM_SQLITE_ALLOWED_DBS` | (无) | 逗号分隔的 SQLite 数据库绝对路径白名单。 |
+| `CTM_SQLITE_MAX_ROWS` | `100` | SQLite 和 cron list 工具最多返回行数。 |
+| `CTM_CRON_DB_PATH` | (无) | OpenClaw cron SQLite 数据库路径，通常也要列入 `CTM_SQLITE_ALLOWED_DBS`。 |
+| `CTM_CRON_STORE_KEY` | (无) | OpenClaw cron store key，例如原始 `jobs.json` 路径。 |
 
 `env.example` 包含一个示例配置。复制后本地修改，不要发布自己的环境文件。
+
+### SQLite 和 OpenClaw cron
+
+SQLite 工具需要显式开启，并且只能打开 `CTM_SQLITE_ALLOWED_DBS` 白名单里的数据库。`sqlite_select` 只读，只允许单条 `SELECT`/`WITH` 或少量安全 `PRAGMA`。不会暴露通用 SQLite 写入能力。
+
+OpenClaw cron 修改请走专用 preview/confirm 流程：
+
+```text
+cron_list_jobs
+cron_get_job
+cron_preview_update_job
+cron_confirm_update_job
+```
+
+本机 OpenClaw 示例配置：
+
+```cmd
+set "CTM_SQLITE_TOOLS=1"
+set "CTM_SQLITE_ALLOWED_DBS=E:\openclaw\.openclaw\state\openclaw.sqlite"
+set "CTM_CRON_DB_PATH=E:\openclaw\.openclaw\state\openclaw.sqlite"
+set "CTM_CRON_STORE_KEY=E:\openclaw\.openclaw\cron\jobs.json"
+```
 
 ---
 
@@ -290,3 +328,7 @@ MCP 地址：http://127.0.0.1:3333/mcp（通过 tunnel profile）
 ### 我能不能设成 full 模式？
 
 可以，但不建议。除非你完全信任本地环境和调用方，否则保持 `review`。
+
+### SQLite 工具不可用
+
+设置 `CTM_SQLITE_TOOLS=1`，把数据库加入 `CTM_SQLITE_ALLOWED_DBS`，使用支持 `node:sqlite` 的 Node.js 运行时，然后重启 MCP server。

@@ -10,6 +10,8 @@ import { loadConfig } from "./config.js";
 import { assertNotDenied, relativeDisplayPath } from "./paths.js";
 import { applyReplacement, PatchStore, previewReplacement } from "./patches.js";
 import { assertCommandAllowed, runCommand } from "./process-runner.js";
+import { redactText, redactValue } from "./redaction.js";
+import { confirmCronUpdate, getCronJob, listCronJobs, previewCronUpdate, sqliteSchema, sqliteSelect, sqliteStatus } from "./sqlite-tools.js";
 import { webFetch, webSearch, webStatus } from "./web.js";
 import { WorkspaceRegistry } from "./workspaces.js";
 
@@ -49,7 +51,7 @@ function createMcpServer(): McpServer {
     {
       name: "chatgpt-codex-tools-mcp",
       title: "ChatGPT Codex Tools",
-      version: "0.2.0",
+      version: "0.3.0",
       description: "Codex-style local workspace tools for ChatGPT. ChatGPT reasons; this server only executes constrained local tools.",
     },
     {
@@ -79,6 +81,11 @@ function createMcpServer(): McpServer {
       searxngConfigured: Boolean(config.searxngUrl),
       webMaxBytes: config.webMaxBytes,
       webTimeoutMs: config.webTimeoutMs,
+      sqliteToolsEnabled: config.sqliteToolsEnabled,
+      sqliteAllowedDbs: config.sqliteAllowedDbs,
+      sqliteMaxRows: config.sqliteMaxRows,
+      cronDbPath: config.cronDbPath,
+      cronStoreKey: config.cronStoreKey,
     }, null, 2)),
   );
 
@@ -345,6 +352,164 @@ function createMcpServer(): McpServer {
     },
   );
 
+  // ---- SQLite and OpenClaw cron tools ----
+
+  server.registerTool(
+    "sqlite_status",
+    {
+      title: "SQLite status",
+      description: "Show SQLite tool configuration. SQLite tools are disabled unless CTM_SQLITE_TOOLS=1 and CTM_SQLITE_ALLOWED_DBS is set.",
+      inputSchema: {},
+      annotations: { readOnlyHint: true },
+      outputSchema: z.object({ result: z.string() }),
+    },
+    async () => textResult(JSON.stringify(sqliteStatus(config), null, 2)),
+  );
+
+  if (config.sqliteToolsEnabled) {
+    server.registerTool(
+      "sqlite_schema",
+      {
+        title: "SQLite schema",
+        description: "Inspect schema for an allowed SQLite database. Does not read table data.",
+        inputSchema: {
+          dbPath: z.string().optional().describe("Absolute path to an allowed SQLite database. Omit only when one DB is allowed."),
+        },
+        annotations: { readOnlyHint: true },
+        outputSchema: z.object({ result: z.string(), rows: z.array(z.record(z.string(), z.unknown())) }),
+      },
+      async ({ dbPath }) => {
+        const rows = sqliteSchema(config, dbPath);
+        return textResult(JSON.stringify(rows, null, 2), { rows });
+      },
+    );
+
+    server.registerTool(
+      "sqlite_select",
+      {
+        title: "SQLite select",
+        description: "Run one read-only SELECT/WITH or safe PRAGMA statement against an allowed SQLite database. Write SQL is blocked.",
+        inputSchema: {
+          dbPath: z.string().optional().describe("Absolute path to an allowed SQLite database. Omit only when one DB is allowed."),
+          sql: z.string().describe("Single read-only SQL statement. SELECT/WITH and safe PRAGMA only."),
+          params: z.array(z.union([z.string(), z.number(), z.null()])).default([]).describe("Positional SQL parameters."),
+          limit: z.number().int().positive().max(config.sqliteMaxRows).default(config.sqliteMaxRows).describe("Maximum rows returned."),
+        },
+        annotations: { readOnlyHint: true },
+        outputSchema: z.object({ result: z.string(), rows: z.array(z.record(z.string(), z.unknown())) }),
+      },
+      async ({ dbPath, sql, params, limit }) => {
+        const rows = sqliteSelect(config, { dbPath, sql, params, limit });
+        return textResult(JSON.stringify(rows, null, 2), { rows });
+      },
+    );
+
+    server.registerTool(
+      "cron_list_jobs",
+      {
+        title: "Cron list jobs",
+        description: "List OpenClaw cron jobs from the configured allowed cron SQLite database. Omits large payload text.",
+        inputSchema: {
+          dbPath: z.string().optional(),
+          storeKey: z.string().optional(),
+          includeDisabled: z.boolean().default(true),
+          limit: z.number().int().positive().max(config.sqliteMaxRows).default(config.sqliteMaxRows),
+        },
+        annotations: { readOnlyHint: true },
+        outputSchema: z.object({ result: z.string(), rows: z.array(z.record(z.string(), z.unknown())) }),
+      },
+      async ({ dbPath, storeKey, includeDisabled, limit }) => {
+        const rows = listCronJobs(config, { dbPath, storeKey, includeDisabled, limit });
+        return textResult(JSON.stringify(rows, null, 2), { rows });
+      },
+    );
+
+    server.registerTool(
+      "cron_get_job",
+      {
+        title: "Cron get job",
+        description: "Get one OpenClaw cron job, including payload fields, from the configured allowed cron SQLite database.",
+        inputSchema: {
+          dbPath: z.string().optional(),
+          storeKey: z.string().optional(),
+          jobId: z.string(),
+        },
+        annotations: { readOnlyHint: true },
+        outputSchema: z.object({ result: z.string(), job: z.record(z.string(), z.unknown()) }),
+      },
+      async ({ dbPath, storeKey, jobId }) => {
+        const job = getCronJob(config, { dbPath, storeKey, jobId });
+        return textResult(JSON.stringify(job, null, 2), { job });
+      },
+    );
+
+    const cronPatchSchema = z.object({
+      name: z.string().optional(),
+      description: z.string().nullable().optional(),
+      enabled: z.boolean().optional(),
+      scheduleKind: z.string().optional(),
+      scheduleExpr: z.string().nullable().optional(),
+      scheduleTz: z.string().nullable().optional(),
+      everyMs: z.number().int().positive().nullable().optional(),
+      at: z.string().nullable().optional(),
+      staggerMs: z.number().int().nonnegative().nullable().optional(),
+      payloadMessage: z.string().nullable().optional(),
+      payloadModel: z.string().nullable().optional(),
+      payloadThinking: z.string().nullable().optional(),
+      payloadTimeoutSeconds: z.number().int().positive().nullable().optional(),
+      deliveryMode: z.string().nullable().optional(),
+      deliveryChannel: z.string().nullable().optional(),
+      deliveryTo: z.string().nullable().optional(),
+      failureAlertDisabled: z.boolean().nullable().optional(),
+      failureAlertAfter: z.number().int().positive().nullable().optional(),
+      failureAlertTo: z.string().nullable().optional(),
+    });
+
+    server.registerTool(
+      "cron_preview_update_job",
+      {
+        title: "Cron preview update",
+        description: "Preview changes to one OpenClaw cron job. Does not write until cron_confirm_update_job is called.",
+        inputSchema: {
+          dbPath: z.string().optional(),
+          storeKey: z.string().optional(),
+          jobId: z.string(),
+          patch: cronPatchSchema,
+        },
+        annotations: { readOnlyHint: false, destructiveHint: false },
+        outputSchema: z.object({ result: z.string(), action_id: z.string(), requires_approval: z.boolean(), diff: z.string() }),
+      },
+      async ({ dbPath, storeKey, jobId, patch }) => {
+        const { action, diff } = previewCronUpdate(config, { dbPath, storeKey, jobId, patch });
+        return textResult(`Pending cron update: ${action.id}\n\n${diff}`, {
+          action_id: action.id,
+          requires_approval: true,
+          diff,
+        });
+      },
+    );
+
+    server.registerTool(
+      "cron_confirm_update_job",
+      {
+        title: "Cron confirm update",
+        description: "Apply a pending cron update created by cron_preview_update_job.",
+        inputSchema: {
+          actionId: z.string(),
+        },
+        annotations: { readOnlyHint: false, destructiveHint: true },
+        outputSchema: z.object({ result: z.string(), applied: z.boolean(), job: z.record(z.string(), z.unknown()) }),
+      },
+      async ({ actionId }) => {
+        const job = confirmCronUpdate(config, actionId);
+        return textResult(`Applied cron update ${actionId} to ${job.job_id}`, {
+          applied: true,
+          job,
+        });
+      },
+    );
+  }
+
   // ---- web tools ----
 
   // web_status is always registered so ChatGPT can discover the web tools config
@@ -419,9 +584,11 @@ async function gitTool(workspaceId: string, command: string) {
 }
 
 function textResult(text: string, structuredContent: object = {}) {
+  const redactedText = redactText(text);
+  const redactedStructuredContent = redactValue({ result: redactedText, ...structuredContent });
   return {
-    content: [{ type: "text" as const, text }],
-    structuredContent: { result: text, ...structuredContent },
+    content: [{ type: "text" as const, text: redactedText }],
+    structuredContent: redactedStructuredContent,
   };
 }
 

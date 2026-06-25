@@ -17,6 +17,11 @@ export interface Config {
   searxngUrl: string;
   webMaxBytes: number;
   webTimeoutMs: number;
+  sqliteToolsEnabled: boolean;
+  sqliteAllowedDbs: string[];
+  sqliteMaxRows: number;
+  cronDbPath: string;
+  cronStoreKey: string;
 }
 
 const defaultDenyGlobs = [
@@ -47,6 +52,11 @@ export function loadConfig(env = process.env): Config {
     searxngUrl: env.CTM_SEARXNG_URL || "",
     webMaxBytes: parseInteger(env.CTM_WEB_MAX_BYTES, 200_000, "CTM_WEB_MAX_BYTES"),
     webTimeoutMs: parseInteger(env.CTM_WEB_TIMEOUT_MS, 15_000, "CTM_WEB_TIMEOUT_MS"),
+    sqliteToolsEnabled: parseBoolean(env.CTM_SQLITE_TOOLS),
+    sqliteAllowedDbs: parseOptionalPathList(env.CTM_SQLITE_ALLOWED_DBS),
+    sqliteMaxRows: parseInteger(env.CTM_SQLITE_MAX_ROWS, 100, "CTM_SQLITE_MAX_ROWS"),
+    cronDbPath: env.CTM_CRON_DB_PATH ? resolve(expandHome(env.CTM_CRON_DB_PATH)) : "",
+    cronStoreKey: env.CTM_CRON_STORE_KEY || "",
   };
 }
 
@@ -82,6 +92,10 @@ function parseList(value: string | undefined, fallback: string[]): string[] {
 
 function parsePathList(value: string): string[] {
   return parseList(value, [process.cwd()]).map((entry) => resolve(expandHome(entry)));
+}
+
+function parseOptionalPathList(value: string | undefined): string[] {
+  return parseList(value, []).map((entry) => resolve(expandHome(entry)));
 }
 
 function expandHome(path: string): string {

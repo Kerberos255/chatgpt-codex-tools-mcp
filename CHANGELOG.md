@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.3.0] - 2026-06-26
+
+### Added
+
+- Best-effort secret redaction for tool text and structured outputs.
+- Optional SQLite tools, disabled by default:
+  - `sqlite_status`
+  - `sqlite_schema`
+  - `sqlite_select`
+- Optional OpenClaw cron helpers backed by an allowlisted SQLite database:
+  - `cron_list_jobs`
+  - `cron_get_job`
+  - `cron_preview_update_job`
+  - `cron_confirm_update_job`
+- SQLite/cron config via `CTM_SQLITE_TOOLS`, `CTM_SQLITE_ALLOWED_DBS`, `CTM_SQLITE_MAX_ROWS`, `CTM_CRON_DB_PATH`, and `CTM_CRON_STORE_KEY`.
+
+### Security
+
+- Generic SQLite writes are intentionally not exposed.
+- Cron writes require preview/confirm and check that the job was not changed between preview and confirmation.
+
 ## [0.2.0] - 2026-06-25
 
 ### Added

@@ -38,8 +38,10 @@ The default public template uses **No Authentication** at the MCP app layer. Thi
 - Git status/diff tools for review.
 - Patch preview + confirm flow for edits.
 - `review` mode shell allowlist for low-risk verification commands.
+- Best-effort secret redaction on tool output.
 - Windows-friendly helper script that can reuse Codex's bundled Node runtime if present.
 - Optional web tools (disabled by default): SearXNG search and public HTTP fetch.
+- Optional SQLite/OpenClaw cron tools (disabled by default): allowlisted read-only SQLite queries and preview/confirm cron job updates.
 
 ---
 
@@ -59,11 +61,18 @@ The default public template uses **No Authentication** at the MCP app layer. Thi
 | `preview_shell` | Create a pending shell action for write/publish commands. |
 | `confirm_shell` | Execute a pending shell action after explicit confirmation. |
 | `shell` | Run a local command, restricted by `CTM_ACCESS_MODE`. |
+| `sqlite_status` | Show SQLite tools configuration. Always available. |
+| `sqlite_schema` * | Inspect schema for an allowlisted SQLite database. Requires `CTM_SQLITE_TOOLS=1`. |
+| `sqlite_select` * | Run one read-only `SELECT`/`WITH` or safe `PRAGMA` against an allowlisted SQLite database. Requires `CTM_SQLITE_TOOLS=1`. |
+| `cron_list_jobs` * | List OpenClaw cron jobs from an allowlisted cron SQLite database. Requires `CTM_SQLITE_TOOLS=1`. |
+| `cron_get_job` * | Read one OpenClaw cron job. Requires `CTM_SQLITE_TOOLS=1`. |
+| `cron_preview_update_job` * | Preview changes to one OpenClaw cron job. Requires `CTM_SQLITE_TOOLS=1`. |
+| `cron_confirm_update_job` * | Apply a pending cron update by action id. Requires `CTM_SQLITE_TOOLS=1`. |
 | `web_status` | Show web tools configuration. Always available. |
 | `web_search` * | Search the web via SearXNG. Requires `CTM_WEB_TOOLS=1` and `CTM_SEARCH_PROVIDER=searxng`. |
 | `web_fetch` * | Fetch a public HTTP(S) page. Blocks localhost, private networks, and credentials. Requires `CTM_WEB_TOOLS=1`. |
 
-\* _Optional tools, disabled by default unless `CTM_WEB_TOOLS=1`._
+\* _Optional tools, disabled by default unless their matching feature flag is enabled._
 
 ---
 
@@ -85,6 +94,7 @@ Important rules:
 - Do not set allowed roots to a whole system drive.
 - Use this behind a private tunnel rather than a public URL.
 - In ChatGPT connector setup, choose **No Authentication** / **未授权**.
+- Treat output redaction as a safety net, not a replacement for narrow `CTM_ALLOWED_ROOTS`, deny rules, and SQLite allowlists.
 
 `review` mode blocks dangerous command patterns and only allows a small set of inspection/test commands such as `git status`, `git diff`, `dir`, `ls`, `node --version`, and `npm run ...`.
 
@@ -99,6 +109,7 @@ Commands that write to git history or publish to a remote, such as `git add`, `g
 - A ChatGPT custom connector that can connect to an MCP server.
 - OpenAI `tunnel-client` if ChatGPT needs to reach this local server through Secure MCP Tunnel.
 - A tunnel id and a runtime key for `tunnel-client`, created in OpenAI Platform tunnel settings.
+- Optional SQLite tools require a Node.js runtime with `node:sqlite` support; Node.js 24+ is recommended for those tools.
 
 On Windows, the helper script checks Node in this order:
 
@@ -295,8 +306,35 @@ Some tunnel doctor tools may still warn about OAuth metadata. For this No Auth t
 | `CTM_SEARXNG_URL` | (none) | SearXNG instance URL. Required when `CTM_SEARCH_PROVIDER=searxng`. |
 | `CTM_WEB_MAX_BYTES` | `200000` | Max bytes returned by web_fetch. |
 | `CTM_WEB_TIMEOUT_MS` | `15000` | Timeout for each web request. |
+| `CTM_SQLITE_TOOLS` | (not set) | Set to `1` to enable optional SQLite and cron tools. |
+| `CTM_SQLITE_ALLOWED_DBS` | (none) | Comma-separated absolute SQLite database paths that tools may open. |
+| `CTM_SQLITE_MAX_ROWS` | `100` | Max rows returned by SQLite and cron list tools. |
+| `CTM_CRON_DB_PATH` | (none) | OpenClaw cron SQLite database path, usually also listed in `CTM_SQLITE_ALLOWED_DBS`. |
+| `CTM_CRON_STORE_KEY` | (none) | OpenClaw cron store key, for example the original `jobs.json` path. |
 
 `env.example` contains a starter configuration. Copy it and adapt it locally, but do not publish your local environment file.
+
+### SQLite and OpenClaw cron
+
+SQLite tools are opt-in and path-allowlisted. `sqlite_select` is read-only: it accepts one `SELECT`/`WITH` statement or a small set of safe `PRAGMA` statements. Generic SQLite writes are intentionally not exposed.
+
+OpenClaw cron changes should use the cron-specific preview/confirm flow:
+
+```text
+cron_list_jobs
+cron_get_job
+cron_preview_update_job
+cron_confirm_update_job
+```
+
+Example local OpenClaw configuration:
+
+```cmd
+set "CTM_SQLITE_TOOLS=1"
+set "CTM_SQLITE_ALLOWED_DBS=E:\openclaw\.openclaw\state\openclaw.sqlite"
+set "CTM_CRON_DB_PATH=E:\openclaw\.openclaw\state\openclaw.sqlite"
+set "CTM_CRON_STORE_KEY=E:\openclaw\.openclaw\cron\jobs.json"
+```
 
 ---
 
@@ -317,6 +355,10 @@ Add the project parent folder to `CTM_ALLOWED_ROOTS`, then restart the MCP serve
 ### Shell command is blocked
 
 You are in `review` mode. Use read/search/git/patch tools where possible. Only switch to `full` for trusted local use.
+
+### SQLite tools are not available
+
+Set `CTM_SQLITE_TOOLS=1`, add the database to `CTM_SQLITE_ALLOWED_DBS`, use a Node.js runtime with `node:sqlite`, then restart the MCP server.
 
 ### `dist/server.js not found`
 
