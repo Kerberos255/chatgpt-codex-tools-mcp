@@ -7,8 +7,8 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import * as z from "zod/v4";
 import { loadConfig } from "./config.js";
+import { createGlobMatcher, type GlobMatcher } from "./globs.js";
 import { assertNotDenied, relativeDisplayPath } from "./paths.js";
-import { applyReplacement, PatchStore, previewReplacement } from "./patches.js";
 import { EditStore, type Change, previewChanges, applyChanges } from "./edit-store.js";
 import { assertCommandAllowed, runCommand } from "./process-runner.js";
 import { redactText, redactValue } from "./redaction.js";
@@ -24,7 +24,6 @@ import { WorkspaceRegistry } from "./workspaces.js";
 
 const config = loadConfig();
 const workspaces = new WorkspaceRegistry(config);
-const patches = new PatchStore();
 const edits = new EditStore();
 
 // --- Pending shell action store ---
@@ -61,7 +60,6 @@ const payloadLimits = {
   previewEditMaxChanges: 20,
   previewEditMaxTextBytesPerChange: 32_000,
   previewEditMaxTotalTextBytes: 120_000,
-  previewPatchMaxTextBytes: 32_000,
   previewShellMaxCommandChars: 800,
   sqliteChangeMaxPayloadBytes: 32_000,
 };
@@ -109,11 +107,6 @@ function assertPreviewEditPayload(changes: unknown[]): void {
   }
 }
 
-function assertPreviewPatchPayload(oldText: string, newText: string): void {
-  assertMaxBytes("preview_patch oldText", oldText, payloadLimits.previewPatchMaxTextBytes);
-  assertMaxBytes("preview_patch newText", newText, payloadLimits.previewPatchMaxTextBytes);
-}
-
 function assertPreviewShellPayload(command: string): void {
   if (command.length > payloadLimits.previewShellMaxCommandChars) {
     throw new Error(`preview_shell command is too long (${command.length} chars). Use smaller commands or preview_edit for file changes.`);
@@ -138,18 +131,6 @@ function assertEditChangePaths(workspaceId: string, changes: Change[]): void {
   }
 }
 
-// --- Regex for glob-like pattern matching (find_files) ---
-
-function globToRegex(pattern: string): RegExp {
-  const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&");
-  const regexStr = escaped
-    .replace(/\*\*/g, "___DOUBLESTAR___")
-    .replace(/\*/g, "[^/]*")
-    .replace(/___DOUBLESTAR___/g, ".*")
-    .replace(/\?/g, ".");
-  return new RegExp(`^${regexStr}$`, "i");
-}
-
 // --- MCP Server factory ---
 
 function createMcpServer(): McpServer {
@@ -157,7 +138,7 @@ function createMcpServer(): McpServer {
     {
       name: "chatgpt-codex-tools-mcp",
       title: "ChatGPT Codex Tools",
-      version: "0.4.0",
+      version: "0.4.1",
       description: "Codex-style local workspace tools for ChatGPT. Constrained local execution: edit files preview-then-confirm, read/search/tree for inspection, SQLite schema/select + structured change workflow, git status/diff, web search/fetch.",
     },
     {
@@ -170,8 +151,7 @@ function createMcpServer(): McpServer {
         "5. For SQLite: use `sqlite_schema`/`sqlite_select` for reading, `sqlite_preview_change`/`sqlite_confirm_change` for structured writes.\n" +
         "6. For SHELL: use `preview_shell` then `confirm_shell` for write/publish commands; use `shell` only for low-risk verification.\n" +
         "7. For web: use `web_search` (SearXNG) and `web_fetch` (public HTTP, blocks local/private networks).\n" +
-        "Use preview-then-confirm for all writes (file edits, SQLite changes, shell commands).\n" +
-        "`preview_patch`/`confirm_patch` are deprecated — use `preview_edit`/`confirm_edit` instead.",
+        "Use preview-then-confirm for all writes (file edits, SQLite changes, shell commands).",
     },
   );
 
@@ -191,7 +171,7 @@ function createMcpServer(): McpServer {
     async () => textResult(JSON.stringify({
       ok: true,
       name: "chatgpt-codex-tools-mcp",
-      version: "0.4.0",
+      version: "0.4.1",
       accessMode: config.accessMode,
       allowedRoots: config.allowedRoots,
       maxReadBytes: config.maxReadBytes,
@@ -311,8 +291,8 @@ function createMcpServer(): McpServer {
     async ({ workspaceId, pattern, path, caseSensitive, contextLines, maxMatches, include, exclude }) => {
       const { workspace, absolutePath } = workspaces.resolve(workspaceId, path);
       assertNotDenied(absolutePath, workspace.root, config.denyGlobs);
-      const includeRe = include ? globToRegex(include) : null;
-      const excludeRe = exclude ? globToRegex(exclude) : null;
+      const includeMatcher = include ? createGlobMatcher(include, { matchBasename: true }) : null;
+      const excludeMatcher = exclude ? createGlobMatcher(exclude, { matchBasename: true }) : null;
       const output = await searchTextFiles(
         workspace.root,
         absolutePath,
@@ -320,8 +300,8 @@ function createMcpServer(): McpServer {
         caseSensitive,
         contextLines,
         maxMatches,
-        includeRe,
-        excludeRe,
+        includeMatcher,
+        excludeMatcher,
       );
       return textResult(output || "(no matches)");
     },
@@ -348,8 +328,8 @@ function createMcpServer(): McpServer {
     async ({ workspaceId, pattern, path, maxResults }) => {
       const { workspace, absolutePath } = workspaces.resolve(workspaceId, path);
       assertNotDenied(absolutePath, workspace.root, config.denyGlobs);
-      const nameRe = globToFilename(pattern);
-      const results = await findFilesByGlob(workspace.root, absolutePath, nameRe, maxResults);
+      const matcher = createGlobMatcher(pattern, { matchBasename: true });
+      const results = await findFilesByGlob(workspace.root, absolutePath, matcher, maxResults);
       return textResult(results.length > 0 ? results.join("\n") : "(no matching files)");
     },
   );
@@ -491,67 +471,6 @@ function createMcpServer(): McpServer {
         applied: true,
         action_id: actionId,
         changeCount: pending.changes.length,
-      });
-    },
-  );
-
-  // ============================================================
-  // preview_patch — deprecated alias for single replace_text
-  // ============================================================
-
-  server.registerTool(
-    "preview_patch",
-    {
-      title: "Preview patch (deprecated)",
-      description: "[DEPRECATED: use preview_edit instead] Create a pending replacement patch for a single file.",
-      inputSchema: {
-        workspaceId: z.string(),
-        path: z.string(),
-        oldText: z.string().describe("Exact text to replace. Use empty string to create a new file."),
-        newText: z.string(),
-      },
-      annotations: { readOnlyHint: false, destructiveHint: false },
-      outputSchema: z.object({ result: z.string(), action_id: z.string(), requires_approval: z.boolean(), path: z.string(), diff: z.string() }),
-    },
-    async ({ workspaceId, path, oldText, newText }) => {
-      assertPreviewPatchPayload(oldText, newText);
-      const { workspace, absolutePath } = workspaces.resolve(workspaceId, path);
-      assertNotDenied(absolutePath, workspace.root, config.denyGlobs);
-      const diff = await previewReplacement(absolutePath, oldText, newText);
-      const pending = patches.create({ workspaceId, path, oldText, newText });
-      return textResult(`[DEPRECATED] Pending action: ${pending.id}\n\n${diff}\n\nUse preview_edit instead.`, {
-        action_id: pending.id,
-        requires_approval: true,
-        path,
-        diff,
-      });
-    },
-  );
-
-  // ============================================================
-  // confirm_patch — deprecated alias
-  // ============================================================
-
-  server.registerTool(
-    "confirm_patch",
-    {
-      title: "Confirm patch (deprecated)",
-      description: "[DEPRECATED: use confirm_edit instead] Apply a pending patch created by preview_patch.",
-      inputSchema: {
-        actionId: z.string(),
-      },
-      annotations: { readOnlyHint: false, destructiveHint: true },
-      outputSchema: z.object({ result: z.string(), applied: z.boolean(), action_id: z.string(), path: z.string() }),
-    },
-    async ({ actionId }) => {
-      const pending = patches.take(actionId);
-      const { workspace, absolutePath } = workspaces.resolve(pending.workspaceId, pending.path);
-      assertNotDenied(absolutePath, workspace.root, config.denyGlobs);
-      await applyReplacement(absolutePath, pending.oldText, pending.newText);
-      return textResult(`[DEPRECATED] Applied ${actionId} to ${pending.path}\nUse confirm_edit going forward.`, {
-        applied: true,
-        action_id: actionId,
-        path: pending.path,
       });
     },
   );
@@ -902,15 +821,16 @@ async function searchTextFiles(
   caseSensitive: boolean,
   contextLines: number,
   maxMatches: number,
-  includeRe: RegExp | null,
-  excludeRe: RegExp | null,
+  includeMatcher: GlobMatcher | null,
+  excludeMatcher: GlobMatcher | null,
 ): Promise<string> {
   const needle = caseSensitive ? pattern : pattern.toLowerCase();
   const lines: string[] = [];
+  let outputBytes = 0;
 
   async function walk(path: string, relBase: string): Promise<void> {
     if (lines.length >= maxMatches) return;
-    if (Buffer.byteLength(lines.join("\n"), "utf8") > config.maxOutputBytes) return;
+    if (outputBytes > config.maxOutputBytes) return;
 
     let info;
     try {
@@ -925,14 +845,16 @@ async function searchTextFiles(
       for (const entry of entries) {
         if (["node_modules", "dist", ".git"].includes(entry.name)) continue;
         const childRel = relBase ? `${relBase}/${entry.name}` : entry.name;
-        if (excludeRe && excludeRe.test(childRel)) continue;
-        if (includeRe && !includeRe.test(childRel)) continue;
+        if (excludeMatcher && (excludeMatcher(childRel) || excludeMatcher(`${childRel}/`))) continue;
         await walk(join(path, entry.name), childRel);
       }
       return;
     }
 
     if (!info.isFile()) return;
+    const relPath = relBase || relativeDisplayPath(workspaceRoot, path);
+    if (excludeMatcher && excludeMatcher(relPath)) return;
+    if (includeMatcher && !includeMatcher(relPath)) return;
 
     let text: string;
     try {
@@ -942,61 +864,52 @@ async function searchTextFiles(
     }
 
     const fileLines = text.split(/\r?\n/);
-    const relPath = relBase || relativeDisplayPath(workspaceRoot, path);
-    let localMatchCount = 0;
 
     for (let index = 0; index < fileLines.length && lines.length < maxMatches; index++) {
       const line = fileLines[index];
       const matchTarget = caseSensitive ? line : line.toLowerCase();
-      const matchResult = caseSensitive ? matchTarget.includes(needle) : matchTarget.includes(needle);
+      const matchResult = matchTarget.includes(needle);
 
       if (matchResult) {
-        localMatchCount++;
         const displayLine = line.length > 300 ? `${line.slice(0, 300)}...` : line;
 
         if (contextLines > 0) {
           const contextStart = Math.max(0, index - contextLines);
           const contextEnd = Math.min(fileLines.length - 1, index + contextLines);
           if (contextStart < index) {
-            lines.push(`... ${relPath}:${contextStart + 1}-${index} (context)`);
+            pushSearchLine(`... ${relPath}:${contextStart + 1}-${index} (context)`);
           }
-          lines.push(`${relPath}:${index + 1}: ${displayLine}`);
+          pushSearchLine(`${relPath}:${index + 1}: ${displayLine}`);
           if (contextEnd > index) {
-            lines.push(`... ${relPath}:${index + 2}-${contextEnd + 1} (context)`);
+            pushSearchLine(`... ${relPath}:${index + 2}-${contextEnd + 1} (context)`);
           }
         } else {
-          lines.push(`${relPath}:${index + 1}: ${displayLine}`);
+          pushSearchLine(`${relPath}:${index + 1}: ${displayLine}`);
         }
       }
     }
   }
 
-  const startRel = relativeDisplayPath(workspaceRoot, startPath);
   const baseRel = startPath === "." ? "" : relative(workspaceRoot, startPath).replace(/\\/g, "/");
   await walk(startPath, startPath === workspaceRoot ? "" : baseRel);
 
   const output = lines.slice(0, maxMatches).join("\n");
   if (Buffer.byteLength(output, "utf8") <= config.maxOutputBytes) return output;
   return output.slice(0, config.maxOutputBytes) + "\n[output truncated]\n";
+
+  function pushSearchLine(line: string): void {
+    if (lines.length >= maxMatches || outputBytes > config.maxOutputBytes) return;
+    lines.push(line);
+    outputBytes += Buffer.byteLength(line, "utf8") + 1;
+  }
 }
 
 // --- find_files helpers ---
 
-function globToFilename(pattern: string): RegExp {
-  // Match just the filename part, or use /**/ pattern for full paths
-  const regexStr = pattern
-    .replace(/[.+^${}()|[\]\\]/g, "\\$&")
-    .replace(/\*\*/g, "___DB___")
-    .replace(/\*/g, "[^/\\\\]*")
-    .replace(/___DB___/g, ".*")
-    .replace(/\?/g, "[^/\\\\]");
-  return new RegExp(`^${regexStr}$`, "i");
-}
-
 async function findFilesByGlob(
   workspaceRoot: string,
   startPath: string,
-  nameRe: RegExp,
+  matcher: GlobMatcher,
   maxResults: number,
 ): Promise<string[]> {
   const results: string[] = [];
@@ -1024,7 +937,7 @@ async function findFilesByGlob(
     if (!info.isFile()) return;
 
     const relPath = relative(workspaceRoot, path).replace(/\\/g, "/");
-    if (nameRe.test(relPath) || nameRe.test(relPath.split("/").pop() ?? "")) {
+    if (matcher(relPath)) {
       results.push(relPath);
     }
   }

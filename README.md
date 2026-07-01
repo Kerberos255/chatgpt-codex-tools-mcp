@@ -60,8 +60,6 @@ The default public template uses **No Authentication** at the MCP app layer. Thi
 | `git_diff` | Run `git diff --stat` and `git diff`. |
 | `preview_edit` | **(recommended)** Create a pending multi-file edit batch. Supports replace_text, replace_range, insert_before, insert_after, append, create, overwrite, rename, delete. |
 | `confirm_edit` | Apply a pending edit batch by action id. |
-| `preview_patch` | **DEPRECATED** — use `preview_edit`. |
-| `confirm_patch` | **DEPRECATED** — use `confirm_edit`. |
 | `preview_shell` | Queue a shell command for review. |
 | `confirm_shell` | Execute a queued shell command. |
 | `shell` | Run a local command, restricted by `CTM_ACCESS_MODE`. |
@@ -314,7 +312,13 @@ Supported edit types (`changes[].type`):
 | `rename` | `path`, `newPath` | Rename/move a file. |
 | `delete` | `path` | Delete a file. |
 
-`preview_patch` / `confirm_patch` are deprecated but kept for backward compatibility. New code should use `preview_edit` / `confirm_edit`.
+### Search globs
+
+`search_files.include`, `search_files.exclude`, and `find_files.pattern` accept common glob patterns:
+
+- `*.ts` matches basenames anywhere in the searched tree.
+- `src/**/*.ts` matches both `src/app.ts` and nested files such as `src/lib/app.ts`.
+- Comma-separated patterns and brace alternatives are supported, for example `*.ts,*.tsx` or `{*.ts,*.tsx}`.
 
 ---
 

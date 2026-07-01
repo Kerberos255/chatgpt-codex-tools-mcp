@@ -60,8 +60,6 @@ ChatGPT 自定义连接器
 | `git_diff` | 运行 `git diff --stat` 和 `git diff`。 |
 | `preview_edit` | **（推荐）** 创建待处理的多文件编辑批次。支持 replace_text、replace_range、insert_before、insert_after、append、create、overwrite、rename、delete。 |
 | `confirm_edit` | 按 actionId 应用待处理的编辑批次。 |
-| `preview_patch` | **已弃用** — 请使用 `preview_edit`。 |
-| `confirm_patch` | **已弃用** — 请使用 `confirm_edit`。 |
 | `preview_shell` | 将 Shell 命令加入审批队列。 |
 | `confirm_shell` | 执行已加入队列的 Shell 命令。 |
 | `shell` | 直接运行本地命令，受 `CTM_ACCESS_MODE` 限制。 |
@@ -314,7 +312,13 @@ confirm_edit  →  应用批次中的所有修改
 | `rename` | `path`、`newPath` | 重命名/移动文件 |
 | `delete` | `path` | 删除文件 |
 
-`preview_patch` / `confirm_patch` 已弃用，但为向后兼容保留。新代码应使用 `preview_edit` / `confirm_edit`。
+### 搜索 glob
+
+`search_files.include`、`search_files.exclude` 和 `find_files.pattern` 支持常见 glob 模式：
+
+- `*.ts` 会匹配搜索树下任意位置的文件名。
+- `src/**/*.ts` 会同时匹配 `src/app.ts` 和 `src/lib/app.ts` 这类嵌套文件。
+- 支持逗号分隔模式和花括号候选，例如 `*.ts,*.tsx` 或 `{*.ts,*.tsx}`。
 
 ---
 

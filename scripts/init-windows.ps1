@@ -122,6 +122,25 @@ if (`$ProxyUrl) {
 `$env:NO_PROXY = "127.0.0.1,localhost,::1"
 `$env:no_proxy = "127.0.0.1,localhost,::1"
 
+Write-Host "Waiting for local MCP server at http://127.0.0.1:$Port/healthz ..."
+`$mcpReady = `$false
+for (`$i = 0; `$i -lt 30; `$i++) {
+  try {
+    `$health = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/healthz" -TimeoutSec 2
+    if (`$health.ok) {
+      `$mcpReady = `$true
+      break
+    }
+  } catch {
+  }
+  Start-Sleep -Seconds 1
+}
+if (-not `$mcpReady) {
+  throw "Local MCP server is not ready on port $Port. Start start-mcp.local.cmd first, then start this tunnel."
+}
+Write-Host "Local MCP server is ready."
+Write-Host ""
+
 if (-not `$env:CONTROL_PLANE_API_KEY) {
   `$secureKey = Read-Host "Paste CONTROL_PLANE_API_KEY for this session" -AsSecureString
   `$bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR(`$secureKey)

@@ -1,11 +1,30 @@
 # Changelog
 
-## v0.4.0 (Unreleased)
+## v0.4.1 (Unreleased)
+
+### Breaking changes
+
+- Removed deprecated `preview_patch` and `confirm_patch` tool aliases. Use `preview_edit` and `confirm_edit`.
+
+### Improvements
+
+- Improved glob handling for `search_files` and `find_files`:
+  - `*.ts` now matches basenames anywhere in the searched tree.
+  - `src/**/*.ts` matches files directly under `src/` and nested below it.
+  - Comma-separated patterns and brace alternatives such as `{*.ts,*.tsx}` are supported.
+  - `search_files.include` is applied to files, not directories, so include filters no longer prune the whole tree too early.
+
+### Internal changes
+
+- Added `src/globs.ts` for shared glob matching.
+- Removed no-longer-used `src/patches.ts`.
+
+## v0.4.0
 
 ### ⚠️ Breaking changes
 
 - **Removed OpenClaw cron-specific tools**: `cron_list_jobs`, `cron_get_job`, `cron_preview_update_job`, and `cron_confirm_update_job`. Use generic SQLite tools instead.
-- **Replaced `filesystem` edit API** with a new generic `preview_edit`/`confirm_edit` pair that supports 9 edit types in multi-file batches. `preview_patch`/`confirm_patch` remain as deprecated aliases.
+- **Replaced `filesystem` edit API** with a new generic `preview_edit`/`confirm_edit` pair that supports 9 edit types in multi-file batches.
 - **SQLite tools restructured**: the old `codex_sqlite_store_status`, `codex_sqlite_store_schema`, `codex_sqlite_store_select`, `codex_sqlite_preview_change`, `codex_sqlite_confirm_change` have been renamed to `sqlite_status`, `sqlite_schema`, `sqlite_select`, `sqlite_preview_change`, `sqlite_confirm_change`. The UI labeling and category prefixes have been simplified.
 
 ### 🚀 New features
