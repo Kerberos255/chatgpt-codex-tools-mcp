@@ -4,124 +4,92 @@ import { resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { Config } from "./config.js";
 
-export interface PendingCronUpdate {
+// --- Pending SQLite Change Store ---
+
+export interface SqliteWhereCondition {
+  column: string;
+  operator: "=" | "!=" | ">" | "<" | ">=" | "<=" | "LIKE" | "IS" | "IS NOT";
+  value: string | number | null;
+}
+
+export interface SqliteInsertChange {
+  type: "insert";
+  table: string;
+  columns: string[];
+  values: (string | number | null)[];
+}
+
+export interface SqliteUpdateChange {
+  type: "update";
+  table: string;
+  /** Column → value. Dot-separated keys (e.g. "job_json.enabled") do jsonSet on JSON text column. */
+  set: Record<string, string | number | null>;
+  /** WHERE conditions, joined with AND. Only simple column=value comparisons. */
+  where: SqliteWhereCondition[];
+  /** Row limit. Default 1. Max 100. */
+  limit?: number;
+  /** Fields to re-verify on confirm. Prevents stale-preview writes. */
+  expected?: Record<string, unknown>;
+}
+
+export interface SqliteDeleteChange {
+  type: "delete";
+  table: string;
+  where: SqliteWhereCondition[];
+  limit?: number;
+  expected?: Record<string, unknown>;
+}
+
+export type SqliteChange = SqliteInsertChange | SqliteUpdateChange | SqliteDeleteChange;
+
+export interface PendingSqliteChange {
   id: string;
   dbPath: string;
-  storeKey: string;
-  jobId: string;
-  patch: CronJobPatch;
-  before: CronJobRow;
-  after: CronJobRow;
+  change: SqliteChange;
+  beforeRows: Record<string, unknown>[];
+  diff: string;
   createdAt: number;
 }
 
-export interface CronJobPatch {
-  name?: string;
-  description?: string | null;
-  enabled?: boolean;
-  scheduleKind?: string;
-  scheduleExpr?: string | null;
-  scheduleTz?: string | null;
-  everyMs?: number | null;
-  at?: string | null;
-  staggerMs?: number | null;
-  payloadMessage?: string | null;
-  payloadModel?: string | null;
-  payloadThinking?: string | null;
-  payloadTimeoutSeconds?: number | null;
-  deliveryMode?: string | null;
-  deliveryChannel?: string | null;
-  deliveryTo?: string | null;
-  failureAlertDisabled?: boolean | null;
-  failureAlertAfter?: number | null;
-  failureAlertTo?: string | null;
-}
+// --- Store ---
 
-export interface CronJobRow {
-  store_key: string;
-  job_id: string;
-  name: string;
-  description: string | null;
-  enabled: number;
-  schedule_kind: string;
-  schedule_expr: string | null;
-  schedule_tz: string | null;
-  every_ms: number | null;
-  at: string | null;
-  stagger_ms: number | null;
-  payload_message: string | null;
-  payload_model: string | null;
-  payload_thinking: string | null;
-  payload_timeout_seconds: number | null;
-  delivery_mode: string | null;
-  delivery_channel: string | null;
-  delivery_to: string | null;
-  failure_alert_disabled: number | null;
-  failure_alert_after: number | null;
-  failure_alert_to: string | null;
-  next_run_at_ms: number | null;
-  last_run_at_ms: number | null;
-  last_run_status: string | null;
-  last_error: string | null;
-  consecutive_errors: number | null;
-  job_json: string;
-  state_json: string;
-  updated_at: number;
-  [key: string]: unknown;
-}
+class SqliteChangeStore {
+  private readonly changes = new Map<string, PendingSqliteChange>();
 
-class CronUpdateStore {
-  private readonly updates = new Map<string, PendingCronUpdate>();
-
-  create(input: Omit<PendingCronUpdate, "id" | "createdAt">): PendingCronUpdate {
-    const update = { ...input, id: `cron_${randomUUID()}`, createdAt: Date.now() };
-    this.updates.set(update.id, update);
-    return update;
+  create(input: Omit<PendingSqliteChange, "id" | "createdAt">): PendingSqliteChange {
+    const entry = { ...input, id: `sqlite_${randomUUID()}`, createdAt: Date.now() };
+    this.changes.set(entry.id, entry);
+    return entry;
   }
 
-  take(actionId: string): PendingCronUpdate {
-    const update = this.updates.get(actionId);
-    if (!update) throw new Error(`Unknown cron actionId: ${actionId}`);
-    this.updates.delete(actionId);
-    return update;
+  take(actionId: string): PendingSqliteChange {
+    const entry = this.changes.get(actionId);
+    if (!entry) throw new Error(`Unknown sqlite actionId: ${actionId}`);
+    this.changes.delete(actionId);
+    return entry;
   }
 }
 
-export const cronUpdates = new CronUpdateStore();
+export const sqliteChanges = new SqliteChangeStore();
+
+// --- Constants ---
 
 const allowedPragmas = new Set(["table_info", "table_list", "index_list", "index_info", "foreign_key_list"]);
-const cronDiffKeys = [
-  "name",
-  "description",
-  "enabled",
-  "schedule_kind",
-  "schedule_expr",
-  "schedule_tz",
-  "every_ms",
-  "at",
-  "stagger_ms",
-  "payload_message",
-  "payload_model",
-  "payload_thinking",
-  "payload_timeout_seconds",
-  "delivery_mode",
-  "delivery_channel",
-  "delivery_to",
-  "failure_alert_disabled",
-  "failure_alert_after",
-  "failure_alert_to",
-] as const;
+const identifierRegex = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
+const safeOperators = ["=", "!=", ">", "<", ">=", "<=", "LIKE", "IS", "IS NOT"] as const;
+
+// --- Public API — Status ---
 
 export function sqliteStatus(config: Config) {
   return {
     enabled: config.sqliteToolsEnabled,
     allowedDbs: config.sqliteAllowedDbs,
     maxRows: config.sqliteMaxRows,
-    cronDbPath: config.cronDbPath,
-    cronStoreKey: config.cronStoreKey,
     nodeSqlite: true,
   };
 }
+
+// --- Public API — Schema ---
 
 export function sqliteSchema(config: Config, dbPath?: string) {
   const resolved = resolveAllowedDb(config, dbPath);
@@ -134,6 +102,8 @@ export function sqliteSchema(config: Config, dbPath?: string) {
     db.close();
   }
 }
+
+// --- Public API — Select ---
 
 export function sqliteSelect(config: Config, input: { dbPath?: string; sql: string; params?: SqliteParam[]; limit?: number }) {
   const resolved = resolveAllowedDb(config, input.dbPath);
@@ -153,116 +123,103 @@ export function sqliteSelect(config: Config, input: { dbPath?: string; sql: stri
   }
 }
 
-export function listCronJobs(config: Config, input: { dbPath?: string; storeKey?: string; includeDisabled?: boolean; limit?: number }) {
-  const dbPath = resolveCronDb(config, input.dbPath);
-  const storeKey = input.storeKey ?? config.cronStoreKey;
-  const limit = Math.min(input.limit ?? config.sqliteMaxRows, config.sqliteMaxRows);
-  const where: string[] = [];
-  const params: SqliteParam[] = [];
-  if (storeKey) {
-    where.push("store_key = ?");
-    params.push(storeKey);
-  }
-  if (!input.includeDisabled) where.push("enabled = 1");
+// --- Public API — Preview Change ---
 
-  const sql = [
-    "SELECT store_key, job_id, name, description, enabled, schedule_kind, schedule_expr, schedule_tz, every_ms, at, next_run_at_ms,",
-    "last_run_at_ms, last_run_status, last_error, consecutive_errors, delivery_mode, delivery_channel, delivery_to, updated_at",
-    "FROM cron_jobs",
-    where.length > 0 ? `WHERE ${where.join(" AND ")}` : "",
-    "ORDER BY sort_order ASC, updated_at DESC, job_id",
-    "LIMIT ?",
-  ].filter(Boolean).join(" ");
-  params.push(limit);
-
-  const db = openDb(dbPath, true);
+export function sqlitePreviewChange(config: Config, input: {
+  dbPath?: string;
+  change: SqliteChange;
+}) {
+  const resolved = resolveAllowedDb(config, input.dbPath);
+  validateChange(input.change);
+  const db = openDb(resolved, true);
   try {
-    return db.prepare(sql).all(...params);
+    const change = input.change;
+    let beforeRows: Record<string, unknown>[] = [];
+    let diff = "";
+
+    switch (change.type) {
+      case "insert": {
+        const row = buildRowFromInsert(change);
+        beforeRows = [];
+        diff = `+ INSERT INTO ${quoteIdent(change.table)} (${change.columns.map(quoteIdent).join(", ")})\n  VALUES\n${JSON.stringify(row, null, 2)}`;
+        break;
+      }
+      case "update": {
+        beforeRows = fetchRowsForWhere(db, change.table, change.where, undefined);
+        const setDisplay = Object.entries(change.set).map(([k, v]) => `  SET ${k} = ${JSON.stringify(v)}`).join("\n");
+        const afterRows = beforeRows.map((row) => applySetToRow(row, change.set));
+        diff = formatBeforeAfter(beforeRows, afterRows, change.table, "UPDATE", setDisplay);
+        break;
+      }
+      case "delete": {
+        beforeRows = fetchRowsForWhere(db, change.table, change.where, change.limit);
+        diff = formatDeletePreview(beforeRows, change.table);
+        break;
+      }
+    }
+
+    const pending = sqliteChanges.create({
+      dbPath: resolved,
+      change,
+      beforeRows,
+      diff,
+    });
+
+    return { action: pending, beforeRows, diff };
   } finally {
     db.close();
   }
 }
 
-export function getCronJob(config: Config, input: { dbPath?: string; storeKey?: string; jobId: string }): CronJobRow {
-  const dbPath = resolveCronDb(config, input.dbPath);
-  const storeKey = input.storeKey ?? config.cronStoreKey;
-  if (!storeKey) throw new Error("storeKey is required when CTM_CRON_STORE_KEY is not set.");
-  const db = openDb(dbPath, true);
-  try {
-    const row = db.prepare("SELECT * FROM cron_jobs WHERE store_key = ? AND job_id = ?").get(storeKey, input.jobId) as CronJobRow | undefined;
-    if (!row) throw new Error(`Cron job not found: ${input.jobId}`);
-    return row;
-  } finally {
-    db.close();
-  }
-}
+// --- Public API — Confirm Change ---
 
-export function previewCronUpdate(config: Config, input: { dbPath?: string; storeKey?: string; jobId: string; patch: CronJobPatch }) {
-  const dbPath = resolveCronDb(config, input.dbPath);
-  const storeKey = input.storeKey ?? config.cronStoreKey;
-  if (!storeKey) throw new Error("storeKey is required when CTM_CRON_STORE_KEY is not set.");
-  const before = getCronJob(config, { dbPath, storeKey, jobId: input.jobId });
-  const after = applyCronPatch(before, input.patch);
-  const diff = diffCronRows(before, after);
-  const action = cronUpdates.create({ dbPath, storeKey, jobId: input.jobId, patch: input.patch, before, after });
-  return { action, diff };
-}
-
-export function confirmCronUpdate(config: Config, actionId: string) {
-  const action = cronUpdates.take(actionId);
-  const db = openDb(action.dbPath, false);
+export function sqliteConfirmChange(config: Config, actionId: string) {
+  const pending = sqliteChanges.take(actionId);
+  const db = openDb(pending.dbPath, false);
   try {
     db.exec("BEGIN IMMEDIATE");
     try {
-      const current = db.prepare("SELECT * FROM cron_jobs WHERE store_key = ? AND job_id = ?").get(action.storeKey, action.jobId) as CronJobRow | undefined;
-      if (!current) throw new Error(`Cron job not found: ${action.jobId}`);
-      if (current.updated_at !== action.before.updated_at) {
-        throw new Error("Cron job changed after preview. Preview the update again before confirming.");
-      }
-      if (!hasCronDataChanges(action.before, action.after)) {
-        db.exec("COMMIT");
-        return current;
+      const change = pending.change;
+
+      switch (change.type) {
+        case "insert": {
+          const placeholders = change.columns.map(() => "?").join(", ");
+          const sql = `INSERT INTO ${quoteIdent(change.table)} (${change.columns.map(quoteIdent).join(", ")}) VALUES (${placeholders})`;
+          db.prepare(sql).run(...change.values);
+          break;
+        }
+
+        case "update": {
+          // Re-verify expected fields
+          if (change.expected && Object.keys(change.expected).length > 0) {
+            const current = fetchRowsForWhere(db, change.table, change.where, undefined);
+            verifyExpected(current, change.expected);
+          }
+
+          const limit = Math.min(change.limit ?? 1, 100);
+          const resolved = resolveSetAndWhere(change);
+          const sql = buildUpdateSql(change.table, resolved, limit);
+          const allParams = [...resolved.setParams, ...resolved.whereParams];
+          db.prepare(sql).run(...allParams);
+          break;
+        }
+
+        case "delete": {
+          if (change.expected && Object.keys(change.expected).length > 0) {
+            const current = fetchRowsForWhere(db, change.table, change.where, undefined);
+            verifyExpected(current, change.expected);
+          }
+
+          const limit = Math.min(change.limit ?? 1, 100);
+          const { whereClause, whereParams } = buildWhereClause(change.where);
+          const sql = `DELETE FROM ${quoteIdent(change.table)}${whereClause ? ` WHERE ${whereClause}` : ""} LIMIT ${limit}`;
+          db.prepare(sql).run(...whereParams);
+          break;
+        }
       }
 
-      const after = { ...action.after, updated_at: Date.now() };
-      db.prepare(
-        [
-          "UPDATE cron_jobs SET",
-          "name = ?, description = ?, enabled = ?, schedule_kind = ?, schedule_expr = ?, schedule_tz = ?, every_ms = ?, at = ?, stagger_ms = ?,",
-          "payload_message = ?, payload_model = ?, payload_thinking = ?, payload_timeout_seconds = ?,",
-          "delivery_mode = ?, delivery_channel = ?, delivery_to = ?,",
-          "failure_alert_disabled = ?, failure_alert_after = ?, failure_alert_to = ?,",
-          "job_json = ?, updated_at = ?",
-          "WHERE store_key = ? AND job_id = ?",
-        ].join(" "),
-      ).run(
-        after.name,
-        after.description,
-        after.enabled,
-        after.schedule_kind,
-        after.schedule_expr,
-        after.schedule_tz,
-        after.every_ms,
-        after.at,
-        after.stagger_ms,
-        after.payload_message,
-        after.payload_model,
-        after.payload_thinking,
-        after.payload_timeout_seconds,
-        after.delivery_mode,
-        after.delivery_channel,
-        after.delivery_to,
-        after.failure_alert_disabled,
-        after.failure_alert_after,
-        after.failure_alert_to,
-        after.job_json,
-        after.updated_at,
-        action.storeKey,
-        action.jobId,
-      );
-      const updated = db.prepare("SELECT * FROM cron_jobs WHERE store_key = ? AND job_id = ?").get(action.storeKey, action.jobId) as CronJobRow | undefined;
       db.exec("COMMIT");
-      return updated ?? after;
+      return { applied: true, action_id: actionId, change_type: change.type, table: change.table };
     } catch (error) {
       db.exec("ROLLBACK");
       throw error;
@@ -272,99 +229,276 @@ export function confirmCronUpdate(config: Config, actionId: string) {
   }
 }
 
-function applyCronPatch(row: CronJobRow, patch: CronJobPatch): CronJobRow {
-  const after = { ...row };
-  const jobJson = parseJobJson(row.job_json);
+// --- Validation ---
 
-  setIfDefined(after, "name", patch.name);
-  setIfDefined(after, "description", patch.description);
-  if (patch.enabled !== undefined) after.enabled = patch.enabled ? 1 : 0;
-  setIfDefined(after, "schedule_kind", patch.scheduleKind);
-  setIfDefined(after, "schedule_expr", patch.scheduleExpr);
-  setIfDefined(after, "schedule_tz", patch.scheduleTz);
-  setIfDefined(after, "every_ms", patch.everyMs);
-  setIfDefined(after, "at", patch.at);
-  setIfDefined(after, "stagger_ms", patch.staggerMs);
-  setIfDefined(after, "payload_message", patch.payloadMessage);
-  setIfDefined(after, "payload_model", patch.payloadModel);
-  setIfDefined(after, "payload_thinking", patch.payloadThinking);
-  setIfDefined(after, "payload_timeout_seconds", patch.payloadTimeoutSeconds);
-  setIfDefined(after, "delivery_mode", patch.deliveryMode);
-  setIfDefined(after, "delivery_channel", patch.deliveryChannel);
-  setIfDefined(after, "delivery_to", patch.deliveryTo);
-  if (patch.failureAlertDisabled !== undefined) after.failure_alert_disabled = patch.failureAlertDisabled === null ? null : patch.failureAlertDisabled ? 1 : 0;
-  setIfDefined(after, "failure_alert_after", patch.failureAlertAfter);
-  setIfDefined(after, "failure_alert_to", patch.failureAlertTo);
+function validateChange(change: SqliteChange): void {
+  if (!change.table || !identifierRegex.test(change.table)) {
+    throw new Error(`Invalid or unsafe table name: ${JSON.stringify(change.table)}`);
+  }
 
-  const nextJobJson = updateJobJson(jobJson, patch);
-  after.job_json = nextJobJson === row.job_json ? row.job_json : nextJobJson;
-  after.updated_at = hasCronDataChanges(row, after) ? Date.now() : row.updated_at;
-  return after;
+  if (change.type === "insert") {
+    if (!Array.isArray(change.columns) || change.columns.length === 0) {
+      throw new Error("insert requires at least one column");
+    }
+    if (!Array.isArray(change.values) || change.values.length !== change.columns.length) {
+      throw new Error("insert values array length must match columns array length");
+    }
+    for (const col of change.columns) {
+      if (!identifierRegex.test(col)) throw new Error(`Invalid column name in insert: ${JSON.stringify(col)}`);
+    }
+    return;
+  }
+
+  if (change.type === "update") {
+    if (!change.set || Object.keys(change.set).length === 0) {
+      throw new Error("update requires at least one set field");
+    }
+    for (const key of Object.keys(change.set)) {
+      const colPart = key.split(".")[0];
+      if (!identifierRegex.test(colPart)) throw new Error(`Invalid column name in set: ${JSON.stringify(key)}`);
+    }
+    if (change.where) validateWhere(change.where);
+    return;
+  }
+
+  if (change.type === "delete") {
+    if (change.where) validateWhere(change.where);
+    return;
+  }
+
+  throw new Error(`Unknown change type: ${(change as SqliteChange).type}`);
 }
 
-function updateJobJson(jobJson: Record<string, unknown>, patch: CronJobPatch): string {
-  assignJson(jobJson, "name", patch.name);
-  assignJson(jobJson, "description", patch.description);
-  assignJson(jobJson, "enabled", patch.enabled);
-
-  if (hasDefined(patch.scheduleKind, patch.scheduleExpr, patch.scheduleTz, patch.everyMs, patch.at, patch.staggerMs)) {
-    const schedule = ensureObject(jobJson, "schedule");
-    assignJson(schedule, "kind", patch.scheduleKind);
-    assignJson(schedule, "expr", patch.scheduleExpr);
-    assignJson(schedule, "tz", patch.scheduleTz);
-    assignJson(schedule, "everyMs", patch.everyMs);
-    assignJson(schedule, "at", patch.at);
-    assignJson(schedule, "staggerMs", patch.staggerMs);
-  }
-
-  if (hasDefined(patch.payloadMessage, patch.payloadModel, patch.payloadThinking, patch.payloadTimeoutSeconds)) {
-    const payload = ensureObject(jobJson, "payload");
-    assignJson(payload, "message", patch.payloadMessage);
-    assignJson(payload, "model", patch.payloadModel);
-    assignJson(payload, "thinking", patch.payloadThinking);
-    assignJson(payload, "timeoutSeconds", patch.payloadTimeoutSeconds);
-  }
-
-  if (hasDefined(patch.deliveryMode, patch.deliveryChannel, patch.deliveryTo)) {
-    const delivery = ensureObject(jobJson, "delivery");
-    assignJson(delivery, "mode", patch.deliveryMode);
-    assignJson(delivery, "channel", patch.deliveryChannel);
-    assignJson(delivery, "to", patch.deliveryTo);
-  }
-
-  if (hasDefined(patch.failureAlertDisabled, patch.failureAlertAfter, patch.failureAlertTo)) {
-    const failureAlert = ensureObject(jobJson, "failureAlert");
-    assignJson(failureAlert, "disabled", patch.failureAlertDisabled);
-    assignJson(failureAlert, "after", patch.failureAlertAfter);
-    assignJson(failureAlert, "to", patch.failureAlertTo);
-  }
-
-  return JSON.stringify(jobJson);
-}
-
-function diffCronRows(before: CronJobRow, after: CronJobRow): string {
-  const lines: string[] = [];
-  for (const key of cronDiffKeys) {
-    if (before[key] !== after[key]) {
-      lines.push(`- ${key}: ${formatValue(before[key])}`);
-      lines.push(`+ ${key}: ${formatValue(after[key])}`);
+function validateWhere(where: SqliteWhereCondition[]): void {
+  for (const cond of where) {
+    if (!identifierRegex.test(cond.column)) {
+      throw new Error(`Invalid column name in WHERE: ${JSON.stringify(cond.column)}`);
+    }
+    if (!(safeOperators as readonly string[]).includes(cond.operator)) {
+      throw new Error(`Invalid WHERE operator: ${cond.operator}`);
     }
   }
-  return lines.length > 0 ? lines.join("\n") : "(no changes)";
 }
 
-function resolveCronDb(config: Config, dbPath?: string): string {
-  const target = dbPath ?? config.cronDbPath;
-  if (!target) throw new Error("CTM_CRON_DB_PATH is not configured.");
-  return resolveAllowedDb(config, target);
+// --- Identifier quoting ---
+
+function quoteIdent(name: string): string {
+  if (!identifierRegex.test(name)) throw new Error(`Unsafe SQL identifier: ${name}`);
+  return `"${name}"`;
 }
+
+// --- WHERE clause builder ---
+
+interface ResolvedWhere {
+  whereClause: string;
+  whereParams: (string | number | null)[];
+}
+
+function buildWhereClause(where: SqliteWhereCondition[]): ResolvedWhere {
+  if (!where || where.length === 0) return { whereClause: "", whereParams: [] };
+
+  const clauses: string[] = [];
+  const params: (string | number | null)[] = [];
+
+  for (const cond of where) {
+    if (cond.operator === "IS" || cond.operator === "IS NOT") {
+      clauses.push(`${quoteIdent(cond.column)} ${cond.operator} NULL`);
+      // No param for IS NULL
+    } else {
+      clauses.push(`${quoteIdent(cond.column)} ${cond.operator} ?`);
+      params.push(cond.value);
+    }
+  }
+
+  return { whereClause: clauses.join(" AND "), whereParams: params };
+}
+
+// --- SET clause builder (handles jsonSet via dot-path) ---
+
+interface ResolvedSet {
+  setClauses: string[];
+  setParams: (string | number | null)[];
+}
+
+function buildSetClause(set: Record<string, string | number | null>): ResolvedSet {
+  const setClauses: string[] = [];
+  const setParams: (string | number | null)[] = [];
+
+  for (const [key, value] of Object.entries(set)) {
+    const dotIndex = key.indexOf(".");
+    if (dotIndex === -1) {
+      // Regular column set
+      setClauses.push(`${quoteIdent(key)} = ?`);
+      setParams.push(value);
+    } else {
+      // jsonSet: column.json.path → json_set("column", '$.json.path', ?)
+      const column = key.slice(0, dotIndex);
+      const pathStr = key.slice(dotIndex + 1);
+      const pathParts = pathStr.split(".");
+      for (const part of pathParts) {
+        if (!identifierRegex.test(part)) throw new Error(`Invalid JSON path segment in set key: ${JSON.stringify(key)}`);
+      }
+      const jsonPath = "$." + pathParts.join(".");
+      setClauses.push(`${quoteIdent(column)} = json_set(${quoteIdent(column)}, '${jsonPath}', ?)`);
+      setParams.push(value);
+    }
+  }
+
+  return { setClauses, setParams };
+}
+
+// --- Combined resolve for UPDATE ---
+
+interface ResolvedSetAndWhere {
+  setClauses: string[];
+  setParams: (string | number | null)[];
+  whereClause: string;
+  whereParams: (string | number | null)[];
+}
+
+function resolveSetAndWhere(change: SqliteUpdateChange): ResolvedSetAndWhere {
+  const { setClauses, setParams } = buildSetClause(change.set);
+  const { whereClause, whereParams } = buildWhereClause(change.where);
+  return { setClauses, setParams, whereClause, whereParams };
+}
+
+// --- SQL builders ---
+
+function buildUpdateSql(table: string, resolved: ResolvedSetAndWhere, limit: number): string {
+  const parts = [`UPDATE ${quoteIdent(table)}`];
+  parts.push(`SET ${resolved.setClauses.join(", ")}`);
+  if (resolved.whereClause) parts.push(`WHERE ${resolved.whereClause}`);
+  parts.push(`LIMIT ${limit}`);
+  return parts.join(" ");
+}
+
+// --- Fetch rows for WHERE ---
+
+function fetchRowsForWhere(
+  db: DatabaseSync,
+  table: string,
+  where: SqliteWhereCondition[],
+  limit: number | undefined,
+): Record<string, unknown>[] {
+  const { whereClause, whereParams } = buildWhereClause(where);
+  const limitClause = limit !== undefined ? ` LIMIT ${Math.min(limit, 100)}` : "";
+  const sql = `SELECT * FROM ${quoteIdent(table)}${whereClause ? ` WHERE ${whereClause}` : ""}${limitClause}`;
+  const stmt = db.prepare(sql);
+  return whereParams.length > 0 ? stmt.all(...whereParams) : stmt.all();
+}
+
+// --- Apply set to a row (for preview diff) ---
+
+function applySetToRow(row: Record<string, unknown>, set: Record<string, string | number | null>): Record<string, unknown> {
+  const result = { ...row };
+  for (const [key, value] of Object.entries(set)) {
+    const dotIndex = key.indexOf(".");
+    if (dotIndex === -1) {
+      result[key] = value;
+    } else {
+      // jsonSet: parse the JSON column, set nested value, re-stringify
+      const column = key.slice(0, dotIndex);
+      const pathStr = key.slice(dotIndex + 1);
+      const pathParts = pathStr.split(".");
+      const raw = result[column];
+      if (typeof raw === "string") {
+        try {
+          const obj = JSON.parse(raw);
+          let current = obj;
+          for (let i = 0; i < pathParts.length - 1; i++) {
+            if (current[pathParts[i]] === undefined || current[pathParts[i]] === null) {
+              current[pathParts[i]] = {};
+            }
+            current = current[pathParts[i]];
+          }
+          current[pathParts[pathParts.length - 1]] = value;
+          result[column] = JSON.stringify(obj);
+        } catch {
+          // If not valid JSON, fall back to setting the whole column
+          result[column] = value;
+        }
+      } else {
+        // Not a string, just set the whole column
+        result[column] = value;
+      }
+    }
+  }
+  return result;
+}
+
+// --- Build row from insert ---
+
+function buildRowFromInsert(change: SqliteInsertChange): Record<string, unknown> {
+  const row: Record<string, unknown> = {};
+  for (let i = 0; i < change.columns.length; i++) {
+    row[change.columns[i]] = change.values[i];
+  }
+  return row;
+}
+
+// --- Expected fields verification ---
+
+function verifyExpected(currentRows: Record<string, unknown>[], expected: Record<string, unknown>): void {
+  if (currentRows.length === 0) throw new Error("Expected rows not found (no rows match WHERE clause)");
+  for (const [key, expectedValue] of Object.entries(expected)) {
+    for (let i = 0; i < currentRows.length; i++) {
+      const actualVal = currentRows[i][key];
+      if (actualVal !== expectedValue) {
+        throw new Error(
+          `Expected field mismatch on confirm: ${key} expected ${JSON.stringify(expectedValue)}, got ${JSON.stringify(actualVal)}. ` +
+          "The row changed since preview. Run preview again.",
+        );
+      }
+    }
+  }
+}
+
+// --- Diff formatters ---
+
+function formatBeforeAfter(
+  before: Record<string, unknown>[],
+  after: Record<string, unknown>[],
+  table: string,
+  operation: string,
+  details: string,
+): string {
+  const lines: string[] = [];
+  for (let i = 0; i < before.length; i++) {
+    lines.push(`--- ${table} row ${i + 1} (before)`);
+    lines.push(`+++ ${table} row ${i + 1} (after)`);
+    for (const key of Object.keys({ ...before[i], ...after[i] })) {
+      const bVal = JSON.stringify(before[i][key]);
+      const aVal = JSON.stringify(after[i][key]);
+      if (bVal !== aVal) {
+        lines.push(`- ${key}: ${bVal}`);
+        lines.push(`+ ${key}: ${aVal}`);
+      }
+    }
+    if (i < before.length - 1) lines.push("---");
+  }
+  if (lines.length === 0) {
+    lines.push(`(no rows match the WHERE condition for ${operation})`);
+  }
+  return lines.join("\n");
+}
+
+function formatDeletePreview(rows: Record<string, unknown>[], table: string): string {
+  if (rows.length === 0) return `(no rows match the WHERE condition. Nothing will be deleted from ${table})`;
+  const lines: string[] = [`DELETE from ${table}: ${rows.length} row(s) will be removed`];
+  for (let i = 0; i < rows.length; i++) {
+    lines.push(`  row ${i + 1}: ${JSON.stringify(rows[i])}`);
+  }
+  return lines.join("\n");
+}
+
+// --- DB helpers ---
 
 function resolveAllowedDb(config: Config, dbPath?: string): string {
   if (!config.sqliteToolsEnabled) throw new Error("SQLite tools are disabled. Set CTM_SQLITE_TOOLS=1 to enable them.");
   if (config.sqliteAllowedDbs.length === 0) throw new Error("No SQLite databases are allowed. Set CTM_SQLITE_ALLOWED_DBS.");
   const target = resolve(dbPath ?? singleAllowedDb(config));
   if (!config.sqliteAllowedDbs.some((allowed) => resolve(allowed).toLowerCase() === target.toLowerCase())) {
-    throw new Error(`SQLite database is not in CTM_SQLITE_ALLOWED_DBS: ${dbPath ?? target}`);
+    throw new Error(`SQLite database is not in CTM_SQLITE_ALLOWED_DBS: ${target}`);
   }
   if (!existsSync(target)) throw new Error(`SQLite database does not exist: ${target}`);
   return target;
@@ -387,42 +521,6 @@ function assertReadOnlySql(sql: string) {
   const pragma = /^pragma\s+([a-z_]+)/i.exec(trimmed);
   if (pragma && allowedPragmas.has(pragma[1].toLowerCase())) return;
   throw new Error("Only SELECT/WITH and safe PRAGMA statements are allowed.");
-}
-
-function parseJobJson(json: string): Record<string, unknown> {
-  const parsed = JSON.parse(json) as unknown;
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("cron job_json is not an object.");
-  return parsed as Record<string, unknown>;
-}
-
-function ensureObject(parent: Record<string, unknown>, key: string): Record<string, unknown> {
-  const value = parent[key];
-  if (value && typeof value === "object" && !Array.isArray(value)) return value as Record<string, unknown>;
-  const next: Record<string, unknown> = {};
-  parent[key] = next;
-  return next;
-}
-
-function assignJson(target: Record<string, unknown>, key: string, value: unknown) {
-  if (value !== undefined) target[key] = value;
-}
-
-function hasDefined(...values: unknown[]): boolean {
-  return values.some((value) => value !== undefined);
-}
-
-function setIfDefined<T extends Record<string, unknown>, K extends keyof T>(target: T, key: K, value: T[K] | undefined) {
-  if (value !== undefined) target[key] = value;
-}
-
-function hasCronDataChanges(before: CronJobRow, after: CronJobRow): boolean {
-  return before.job_json !== after.job_json || cronDiffKeys.some((key) => before[key] !== after[key]);
-}
-
-function formatValue(value: unknown): string {
-  if (value === null || value === undefined) return "null";
-  if (typeof value === "string") return JSON.stringify(value.length > 400 ? `${value.slice(0, 400)}...` : value);
-  return JSON.stringify(value);
 }
 
 type SqliteParam = string | number | bigint | null;

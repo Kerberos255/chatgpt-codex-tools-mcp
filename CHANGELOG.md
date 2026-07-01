@@ -1,63 +1,83 @@
 # Changelog
 
-## [0.3.0] - 2026-06-26
+## v0.4.0 (Unreleased)
 
-### Added
+### ⚠️ Breaking changes
 
-- Best-effort secret redaction for tool text and structured outputs.
-- Optional SQLite tools, disabled by default:
-  - `sqlite_status`
-  - `sqlite_schema`
-  - `sqlite_select`
-- Optional OpenClaw cron helpers backed by an allowlisted SQLite database:
-  - `cron_list_jobs`
-  - `cron_get_job`
-  - `cron_preview_update_job`
-  - `cron_confirm_update_job`
-- SQLite/cron config via `CTM_SQLITE_TOOLS`, `CTM_SQLITE_ALLOWED_DBS`, `CTM_SQLITE_MAX_ROWS`, `CTM_CRON_DB_PATH`, and `CTM_CRON_STORE_KEY`.
+- **Removed OpenClaw cron-specific tools**: `cron_list_jobs`, `cron_get_job`, `cron_preview_update_job`, and `cron_confirm_update_job`. Use generic SQLite tools instead.
+- **Replaced `filesystem` edit API** with a new generic `preview_edit`/`confirm_edit` pair that supports 9 edit types in multi-file batches. `preview_patch`/`confirm_patch` remain as deprecated aliases.
+- **SQLite tools restructured**: the old `codex_sqlite_store_status`, `codex_sqlite_store_schema`, `codex_sqlite_store_select`, `codex_sqlite_preview_change`, `codex_sqlite_confirm_change` have been renamed to `sqlite_status`, `sqlite_schema`, `sqlite_select`, `sqlite_preview_change`, `sqlite_confirm_change`. The UI labeling and category prefixes have been simplified.
 
-### Security
+### 🚀 New features
 
-- Generic SQLite writes are intentionally not exposed.
-- Cron writes require preview/confirm and check that the job was not changed between preview and confirmation.
+- **Payload guardrails**: large edit, shell, and SQLite change payloads are rejected with split-call guidance.
+- **Generic file editing** (`preview_edit`/`confirm_edit`):
+  - 9 edit types: replace_text, replace_range, insert_before, insert_after, append, create, overwrite, rename, delete.
+  - Multi-file batches: one action can contain many changes across different files.
+  - Preview produces per-change diffs before any file is touched.
+- **Enhanced `search_files`**:
+  - New `caseSensitive`, `contextLines`, `maxMatches`, `include`, `exclude` parameters.
+  - Include/exclude use glob-style patterns.
+- **New `find_files` tool** — find files by name pattern (glob).
+- **New `project_tree` tool** — visual directory tree (depth-limited, skips common ignore dirs).
+- **SQLite tools reworked**:
+  - `sqlite_preview_change` now supports `expected` field re-verification on confirm for update/delete, preventing stale-preview writes.
+  - Full `jsonSet` support via dot-path keys (e.g. `job_json.enabled`) in update `set`.
+  - Insert validation matches columns/values length.
+  - UI labels and descriptions simplified.
+- **`preview_shell`/`confirm_shell`** — two-step shell approval for write/publish commands in review mode.
+- **Server info updated**:
+  - Version bumped to 0.4.0.
+  - Description and MCP instructions updated to reflect new workflow and features.
+- **README updated**:
+  - Full documentation for new tools (`preview_edit`, `confirm_edit`, `find_files`, `project_tree`, `sqlite_preview_change`, `sqlite_confirm_change`).
+  - SQLite jsonSet documentation.
+  - Edit types reference table.
+  - Renamed SQLite tool listing.
 
-## [0.2.0] - 2026-06-25
+### 🛠 Internal changes
 
-### Added
+- **Deleted files**:
+  - `src/sqlite-tools.ts` fully rewritten — removed `CronStore`, `openclawCronList`, `openclawCronCreate`, `codex_` prefix mapping.
+- **New file**:
+  - `src/edit-store.ts` — generic multi-file edit store with 9 edit types, preview + async apply logic.
+- **Modified files**:
+  - `src/server.ts`: Complete rewrite — new tool registration, `EditStore`/`ShellActionStore` instances, updated descriptions/messages, enhanced `search_files` implementation, new `find_files`/`project_tree` helpers.
+  - `src/config.ts`: Removed no-longer-used config fields if any.
+  - `README.md`, `README.zh.md`: Full documentation rewrite for v0.4.0.
+  - `CHANGELOG.md`: This file.
+  - `env.example`, `.env.example`: Removed OpenClaw cron config; added CTM_SQLITE_TOOLS/ALLOWED_DBS examples.
 
-- Added `outputSchema` to all 15 MCP tools for structured content metadata.
-- Optional web tools: `web_search`, `web_fetch` (disabled by default). `web_status` is always registered.
-  - Config via `CTM_WEB_TOOLS`, `CTM_SEARCH_PROVIDER`, `CTM_SEARXNG_URL`, `CTM_WEB_MAX_BYTES`, `CTM_WEB_TIMEOUT_MS`.
-- `local_status` now reports web tools config state in its JSON output.
+### 🗑 Removed
 
-### Changed
+- **cron tools** (`cron_list_jobs`, `cron_get_job`, `cron_preview_update_job`, `cron_confirm_update_job`): These were tightly coupled to the OpenClaw cron format. Users who need cron data can use the generic SQLite tools instead.
+- **`codex_` prefix**: All tools use `snake_case` without prefix, matching standard MCP naming conventions.
 
-- `web_status` is now always registered; `CTM_WEB_TOOLS` only gates `web_search` and `web_fetch`.
+## v0.3.0
 
-### Breaking
+- Added SQLite tools (`codex_sqlite_store_*`): read schema and select from an allowlisted SQLite database.
+- Added OpenClaw cron tools (`cron_list_jobs`, `cron_get_job`, `cron_preview_update_job`, `cron_confirm_update_job`) backed by an allowlisted SQLite database.
+- Added config-driven optional SQLite/cron feature gating (`CTM_SQLITE_TOOLS`, `CTM_SQLITE_ALLOWED_DBS`, `CTM_CRON_TOOLS`, `CTM_CRON_DB_PATH`).
+- Added best-effort secret redaction on tool output (sensitive values matched against `CTM_SECRET_PATTERNS` or common patterns).
+- v0.3.0 SQLite tools used `codex_sqlite_store_` prefix.
 
-- Renamed all MCP tools to remove the `codex_` prefix:
-  - `codex_local_status` → `local_status`
-  - `codex_workspace_open` → `open_workspace`
-  - `codex_list_dir` → `list_dir`
-  - `codex_read_file` → `read_file`
-  - `codex_search_files` → `search_files`
-  - `codex_git_status` → `git_status`
-  - `codex_git_diff` → `git_diff`
-  - `codex_apply_patch_preview` → `preview_patch`
-  - `codex_apply_patch_confirm` → `confirm_patch`
-  - `codex_shell_preview` → `preview_shell`
-  - `codex_shell_confirm` → `confirm_shell`
-  - `codex_shell` → `shell`
+## v0.2.0
 
-## v0.1.0 - Initial public release
+- Renamed all tools to remove `codex_` prefix for a cleaner MCP schema.
+- Added optional `web_search` and `web_fetch` tools, gated behind `CTM_WEB_TOOLS`.
+- Added `web_status` tool.
+- Reworked process runner with timeout and output byte cap.
+- Added `search_files` tool (basic text search).
+- Added output byte cap to shell tool.
+- Added `CTM_DENY_GLOBS` and global deny rules.
+- Added `CTM_MAX_READ_BYTES` and `CTM_MAX_OUTPUT_BYTES` config.
+- Added Windows startup scripts and `initialize`/`init-windows.cmd` helper.
+- Enhanced secret redaction to be config-driven.
 
-- Local HTTP MCP server for ChatGPT custom connectors.
-- Workspace allowlist via `CTM_ALLOWED_ROOTS`.
-- Read/list/search tools for local projects.
-- Git status/diff inspection tools.
-- Patch preview and confirmation workflow.
-- Review-mode shell allowlist.
-- Windows initializer and launcher scripts.
-- Private tunnel startup flow with runtime key prompt instead of saving keys to local files.
-- English and Chinese README files.
+## v0.1.0
+
+- Initial release.
+- Local MCP server with workspace boundary (`CTM_ALLOWED_ROOTS`).
+- File read/list, shell (review/full mode), git status/diff, `patch` (single replace_text preview-then-apply).
+- Basic secret redaction.
+- Config via environment variables or dotenv.

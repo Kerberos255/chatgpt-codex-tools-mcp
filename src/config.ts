@@ -20,8 +20,6 @@ export interface Config {
   sqliteToolsEnabled: boolean;
   sqliteAllowedDbs: string[];
   sqliteMaxRows: number;
-  cronDbPath: string;
-  cronStoreKey: string;
 }
 
 const defaultDenyGlobs = [
@@ -55,8 +53,6 @@ export function loadConfig(env = process.env): Config {
     sqliteToolsEnabled: parseBoolean(env.CTM_SQLITE_TOOLS),
     sqliteAllowedDbs: parseOptionalPathList(env.CTM_SQLITE_ALLOWED_DBS),
     sqliteMaxRows: parseInteger(env.CTM_SQLITE_MAX_ROWS, 100, "CTM_SQLITE_MAX_ROWS"),
-    cronDbPath: env.CTM_CRON_DB_PATH ? resolve(expandHome(env.CTM_CRON_DB_PATH)) : "",
-    cronStoreKey: env.CTM_CRON_STORE_KEY || "",
   };
 }
 
