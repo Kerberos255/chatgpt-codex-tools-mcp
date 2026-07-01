@@ -1,0 +1,35 @@
+{
+  "mcp": {
+    "host": "127.0.0.1",
+    "port": 3333,
+    "allowedRoots": [
+      "."
+    ],
+    "accessMode": "review",
+    "maxReadBytes": 200000,
+    "maxOutputBytes": 200000
+  },
+  "runtime": {
+    "codexRuntimeRoot": "",
+    "fallbackNodeBin": "",
+    "npmCache": ""
+  },
+  "proxy": {
+    "url": "",
+    "noProxy": "127.0.0.1,localhost,::1",
+    "nodeUseEnvProxy": false
+  },
+  "web": {
+    "enabled": false,
+    "searchProvider": "none",
+    "searxngUrl": "",
+    "maxBytes": 200000,
+    "timeoutMs": 15000
+  },
+  "sqlite": {
+    "enabled": false,
+    "allowedDbs": [],
+    "maxRows": 100
+  },
+  "environment": {}
+}

@@ -21,10 +21,6 @@ function Write-Step([string]$Text) {
   Write-Host "==> $Text"
 }
 
-function Quote-CmdValue([string]$Value) {
-  return $Value.Replace('^', '^^').Replace('&', '^&').Replace('|', '^|').Replace('<', '^<').Replace('>', '^>')
-}
-
 function Quote-PsValue([string]$Value) {
   return "'" + $Value.Replace("'", "''") + "'"
 }
@@ -70,11 +66,42 @@ if (-not $TunnelClientPath -or -not (Test-Path -LiteralPath $TunnelClientPath)) 
 }
 
 Write-Step "Write local start scripts"
-$allowedEscaped = Quote-CmdValue $AllowedRoots
-$profileEscaped = Quote-CmdValue $Profile
-$tunnelEscaped = Quote-CmdValue $TunnelClientPath
-$proxyEscaped = Quote-CmdValue $ProxyUrl
-$healthEscaped = Quote-CmdValue $HealthAddr
+$allowedRootList = $AllowedRoots -split "," | ForEach-Object { $_.Trim() } | Where-Object { $_ }
+$configObject = [ordered]@{
+  mcp = [ordered]@{
+    host = "127.0.0.1"
+    port = $Port
+    allowedRoots = @($allowedRootList)
+    accessMode = "review"
+    maxReadBytes = 200000
+    maxOutputBytes = 200000
+  }
+  runtime = [ordered]@{}
+  proxy = [ordered]@{
+    noProxy = "127.0.0.1,localhost,::1"
+  }
+  web = [ordered]@{
+    enabled = $false
+    searchProvider = "none"
+    searxngUrl = ""
+    maxBytes = 200000
+    timeoutMs = 15000
+  }
+  sqlite = [ordered]@{
+    enabled = $false
+    allowedDbs = @()
+    maxRows = 100
+  }
+  environment = [ordered]@{}
+}
+
+if ($ProxyUrl) {
+  $configObject.proxy["url"] = $ProxyUrl
+  $configObject.proxy["nodeUseEnvProxy"] = $true
+}
+
+$configJson = $configObject | ConvertTo-Json -Depth 10
+Set-Content -LiteralPath (Join-Path $projectRoot "config.json") -Value $configJson -Encoding UTF8
 
 $profilePs = Quote-PsValue $Profile
 $tunnelPs = Quote-PsValue $TunnelClientPath
@@ -85,9 +112,6 @@ $startMcp = @"
 @echo off
 setlocal EnableExtensions
 cd /d "%~dp0"
-set "CTM_ALLOWED_ROOTS=$allowedEscaped"
-set "CTM_ACCESS_MODE=review"
-set "PORT=$Port"
 powershell -NoProfile -ExecutionPolicy Bypass -File ".\scripts\start-mcp.ps1"
 pause
 "@
@@ -173,6 +197,7 @@ if (`$LASTEXITCODE -ne 0) {
 "@
 Set-Content -LiteralPath (Join-Path $projectRoot "start-tunnel.local.ps1") -Value $startTunnelPs1 -Encoding UTF8
 
+Write-Host "Created config.json"
 Write-Host "Created start-mcp.local.cmd"
 Write-Host "Created start-tunnel.local.cmd"
 Write-Host "Created start-tunnel.local.ps1"

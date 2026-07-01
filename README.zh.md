@@ -177,11 +177,13 @@ init-windows.cmd
 1. 允许的工作区根路径，例如 `D:\Projects`。
 2. npm 依赖和 `dist/server.js` 构建输出。
 3. 本地 `tunnel-client.exe` 路径。
-4. 为本机生成的仅本地启动文件。
+4. 本地 MCP 启动配置 `config.json`。
+5. 为本机生成的仅本地隧道启动文件。
 
-它会创建以下本地启动文件：
+它会创建或更新以下本地文件：
 
 ```text
+config.json
 start-mcp.local.cmd
 start-tunnel.local.cmd
 start-tunnel.local.ps1
@@ -213,48 +215,77 @@ start-mcp.cmd       # 仅启动本地 MCP 服务
 start-tunnel.cmd    # 仅启动私有隧道（初始化后）
 ```
 
-**有用的环境变量：**
-
-| 变量 | 说明 |
-| --- | --- |
-| `CTM_ALLOWED_ROOTS` | 逗号分隔的允许工作区根路径。 |
-| `CTM_ACCESS_MODE` | `review` 或 `full`。默认：`review`。 |
-| `PORT` | 本地 HTTP 端口。默认：`3333`。 |
-| `OPENCLAW_NODE_BIN` | 可选，包含 `node.exe` 的目录。 |
-| `CTM_NPM_CACHE` | 可选的 npm 缓存目录位置。 |
-
-示例：
-
-```cmd
-set "CTM_ALLOWED_ROOTS=D:\Projects"
-set "OPENCLAW_NODE_BIN=C:\Tools\nodejs"
-set "CTM_NPM_CACHE=D:\npm-cache"
-start-mcp.cmd
-```
+`start-mcp.cmd` 会读取项目根目录的 `config.json`。环境变量和显式 PowerShell 参数仍可覆盖 `config.json`，适合临时测试。
 
 ---
 
 ## 配置参考
 
-| 变量 | 默认值 | 说明 |
-| --- | --- | --- |
-| `HOST` | `127.0.0.1` | 除非你添加了自己的保护，否则保持本地绑定。 |
-| `PORT` | `3333` | 本地 HTTP 端口。 |
-| `CTM_ALLOWED_ROOTS` | 当前工作目录 | 逗号分隔的允许根路径列表。 |
-| `CTM_ACCESS_MODE` | `review` | `review` 或 `full`。 |
-| `CTM_DENY_GLOBS` | 内置拒绝列表 | 逗号分隔的拒绝规则。 |
-| `CTM_MAX_READ_BYTES` | `200000` | 文件读取返回的最大字节数。 |
-| `CTM_MAX_OUTPUT_BYTES` | `200000` | Shell/Git 输出返回的最大字节数。 |
-| `CTM_WEB_TOOLS` | 未设置 | 设为 `1` 启用可选 Web 工具（`web_search`、`web_fetch`）。`web_status` 始终可用。 |
-| `CTM_SEARCH_PROVIDER` | `none` | `none` 或 `searxng`。需要 `CTM_WEB_TOOLS=1`。 |
-| `CTM_SEARXNG_URL` | 无 | SearXNG 实例 URL。`CTM_SEARCH_PROVIDER=searxng` 时必须设置。 |
-| `CTM_WEB_MAX_BYTES` | `200000` | web_fetch 返回的最大字节数。 |
-| `CTM_WEB_TIMEOUT_MS` | `15000` | 每个网络请求的超时时间。 |
-| `CTM_SQLITE_TOOLS` | 未设置 | 设为 `1` 启用可选 SQLite 工具。 |
-| `CTM_SQLITE_ALLOWED_DBS` | 无 | 逗号分隔的允许访问的 SQLite 数据库绝对路径。 |
-| `CTM_SQLITE_MAX_ROWS` | `100` | SQLite 工具返回的最大行数。 |
+`config.json` 是启动器配置。`scripts/start-mcp.ps1` 会先把它映射为现有运行时环境变量，再启动 `dist/server.js`。
 
-`env.example` 包含启动配置。请复制并在本地修改，但不要发布你的本地环境文件。
+```json
+{
+  "mcp": {
+    "host": "127.0.0.1",
+    "port": 3333,
+    "allowedRoots": ["D:\\Projects"],
+    "accessMode": "review",
+    "denyGlobs": ["**/.env", "**/key.txt"],
+    "maxReadBytes": 200000,
+    "maxOutputBytes": 200000
+  },
+  "runtime": {
+    "codexRuntimeRoot": "",
+    "fallbackNodeBin": "C:\\Tools\\nodejs",
+    "npmCache": "D:\\npm-cache"
+  },
+  "proxy": {
+    "url": "http://127.0.0.1:10808",
+    "noProxy": "127.0.0.1,localhost,::1",
+    "nodeUseEnvProxy": true
+  },
+  "web": {
+    "enabled": false,
+    "searchProvider": "none",
+    "searxngUrl": "",
+    "maxBytes": 200000,
+    "timeoutMs": 15000
+  },
+  "sqlite": {
+    "enabled": false,
+    "allowedDbs": [],
+    "maxRows": 100
+  },
+  "environment": {}
+}
+```
+
+| JSON 路径 | 环境变量 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `mcp.host` | `HOST` | `127.0.0.1` | 除非你添加了自己的保护，否则保持本地绑定。 |
+| `mcp.port` | `PORT` | `3333` | 本地 HTTP 端口。 |
+| `mcp.allowedRoots` | `CTM_ALLOWED_ROOTS` | 项目根目录 | 允许的工作区根路径，支持数组或逗号分隔字符串。 |
+| `mcp.accessMode` | `CTM_ACCESS_MODE` | `review` | `review` 或 `full`。 |
+| `mcp.denyGlobs` | `CTM_DENY_GLOBS` | 内置拒绝列表 | 额外拒绝规则，支持数组或逗号分隔字符串。 |
+| `mcp.maxReadBytes` | `CTM_MAX_READ_BYTES` | `200000` | 文件读取返回的最大字节数。 |
+| `mcp.maxOutputBytes` | `CTM_MAX_OUTPUT_BYTES` | `200000` | Shell/Git 输出返回的最大字节数。 |
+| `runtime.codexRuntimeRoot` | `CTM_CODEX_RUNTIME_ROOT` | Codex 捆绑运行时目录 | 高级选项，用于覆盖 Codex Node 运行时搜索根目录。 |
+| `runtime.fallbackNodeBin` | `OPENCLAW_NODE_BIN` | 无 | 可选，包含 `node.exe` 的目录。 |
+| `runtime.npmCache` | `CTM_NPM_CACHE` | 无 | 可选 npm 缓存目录。 |
+| `proxy.url` | `PROXY_URL`、`HTTP_PROXY`、`HTTPS_PROXY` | 无 | 可选的 Node/Web 请求出站代理。 |
+| `proxy.noProxy` | `NO_PROXY` | 无 | 不走代理的主机列表。 |
+| `proxy.nodeUseEnvProxy` | `NODE_USE_ENV_PROXY` | 无 | 设为 `true` 时供支持环境代理的 Node 版本使用。 |
+| `web.enabled` | `CTM_WEB_TOOLS` | 关闭 | 启用可选 `web_search` 和 `web_fetch`。`web_status` 始终可用。 |
+| `web.searchProvider` | `CTM_SEARCH_PROVIDER` | `none` | `none` 或 `searxng`。需要 `web.enabled=true`。 |
+| `web.searxngUrl` | `CTM_SEARXNG_URL` | 无 | SearXNG 实例 URL。`searchProvider=searxng` 时必须设置。 |
+| `web.maxBytes` | `CTM_WEB_MAX_BYTES` | `200000` | `web_fetch` 返回的最大字节数。 |
+| `web.timeoutMs` | `CTM_WEB_TIMEOUT_MS` | `15000` | 每个网络请求的超时时间。 |
+| `sqlite.enabled` | `CTM_SQLITE_TOOLS` | 关闭 | 启用可选 SQLite 工具。 |
+| `sqlite.allowedDbs` | `CTM_SQLITE_ALLOWED_DBS` | 无 | 允许访问的 SQLite 数据库绝对路径，支持数组或逗号分隔字符串。 |
+| `sqlite.maxRows` | `CTM_SQLITE_MAX_ROWS` | `100` | SQLite 工具返回的最大行数。 |
+| `environment` | 任意变量 | 无 | 高级选项，用于设置上面没有覆盖的环境变量默认值。 |
+
+`config.json` 不应存放隧道运行时密钥。`CONTROL_PLANE_API_KEY` 请继续放在当前环境变量、本地 key 文件或私有启动器中。
 
 ### SQLite 工具
 

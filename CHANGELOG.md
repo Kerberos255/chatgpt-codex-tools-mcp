@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.4.3 (2026-07-01)
+
+### Improvements
+
+- Added `config.json` support for MCP launcher settings.
+- Moved local MCP launcher defaults out of `start-mcp.cmd`.
+- Removed obsolete MCP launcher variables for the old OpenClaw cron-specific tools.
+
 ## v0.4.2 (2026-07-01)
 
 ### Improvements

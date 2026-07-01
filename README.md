@@ -177,11 +177,13 @@ The initializer asks for or configures:
 1. Allowed workspace roots, for example `D:\Projects`.
 2. npm dependencies and `dist/server.js` build output.
 3. The local `tunnel-client.exe` path.
-4. Local-only startup files for this machine.
+4. `config.json` for local MCP launcher settings.
+5. Local-only tunnel startup files for this machine.
 
-It creates these local startup files:
+It creates or updates these local files:
 
 ```text
+config.json
 start-mcp.local.cmd
 start-tunnel.local.cmd
 start-tunnel.local.ps1
@@ -213,48 +215,77 @@ start-mcp.cmd       # local MCP server only
 start-tunnel.cmd    # private tunnel only, after initialization
 ```
 
-Useful environment variables:
-
-| Variable | Meaning |
-| --- | --- |
-| `CTM_ALLOWED_ROOTS` | Comma-separated allowed workspace roots. |
-| `CTM_ACCESS_MODE` | `review` or `full`. Default: `review`. |
-| `PORT` | Local HTTP port. Default: `3333`. |
-| `OPENCLAW_NODE_BIN` | Optional folder containing `node.exe`. |
-| `CTM_NPM_CACHE` | Optional npm cache folder location. |
-
-Example:
-
-```cmd
-set "CTM_ALLOWED_ROOTS=D:\Projects"
-set "OPENCLAW_NODE_BIN=C:\Tools\nodejs"
-set "CTM_NPM_CACHE=D:\npm-cache"
-start-mcp.cmd
-```
+`start-mcp.cmd` reads `config.json` from the project root. Environment variables and explicit PowerShell parameters still override `config.json`, which is useful for one-off tests.
 
 ---
 
 ## Configuration reference
 
-| Variable | Default | Notes |
-| --- | --- | --- |
-| `HOST` | `127.0.0.1` | Keep local unless you add your own protection. |
-| `PORT` | `3333` | Local HTTP port. |
-| `CTM_ALLOWED_ROOTS` | current working directory | Comma-separated list of allowed roots. |
-| `CTM_ACCESS_MODE` | `review` | `review` or `full`. |
-| `CTM_DENY_GLOBS` | built-in deny list | Comma-separated deny rules. |
-| `CTM_MAX_READ_BYTES` | `200000` | Max bytes returned by file reads. |
-| `CTM_MAX_OUTPUT_BYTES` | `200000` | Max bytes returned by shell/git output. |
-| `CTM_WEB_TOOLS` | (not set) | Set to `1` to enable optional web tools (`web_search`, `web_fetch`). `web_status` is always available. |
-| `CTM_SEARCH_PROVIDER` | `none` | `none` or `searxng`. Requires `CTM_WEB_TOOLS=1`. |
-| `CTM_SEARXNG_URL` | (none) | SearXNG instance URL. Required when `CTM_SEARCH_PROVIDER=searxng`. |
-| `CTM_WEB_MAX_BYTES` | `200000` | Max bytes returned by web_fetch. |
-| `CTM_WEB_TIMEOUT_MS` | `15000` | Timeout for each web request. |
-| `CTM_SQLITE_TOOLS` | (not set) | Set to `1` to enable optional SQLite tools. |
-| `CTM_SQLITE_ALLOWED_DBS` | (none) | Comma-separated absolute SQLite database paths that tools may open. |
-| `CTM_SQLITE_MAX_ROWS` | `100` | Max rows returned by SQLite tools. |
+`config.json` is a launcher config. `scripts/start-mcp.ps1` maps it to the existing runtime environment variables before starting `dist/server.js`.
 
-`env.example` contains a starter configuration. Copy it and adapt it locally, but do not publish your local environment file.
+```json
+{
+  "mcp": {
+    "host": "127.0.0.1",
+    "port": 3333,
+    "allowedRoots": ["D:\\Projects"],
+    "accessMode": "review",
+    "denyGlobs": ["**/.env", "**/key.txt"],
+    "maxReadBytes": 200000,
+    "maxOutputBytes": 200000
+  },
+  "runtime": {
+    "codexRuntimeRoot": "",
+    "fallbackNodeBin": "C:\\Tools\\nodejs",
+    "npmCache": "D:\\npm-cache"
+  },
+  "proxy": {
+    "url": "http://127.0.0.1:10808",
+    "noProxy": "127.0.0.1,localhost,::1",
+    "nodeUseEnvProxy": true
+  },
+  "web": {
+    "enabled": false,
+    "searchProvider": "none",
+    "searxngUrl": "",
+    "maxBytes": 200000,
+    "timeoutMs": 15000
+  },
+  "sqlite": {
+    "enabled": false,
+    "allowedDbs": [],
+    "maxRows": 100
+  },
+  "environment": {}
+}
+```
+
+| JSON path | Environment variable | Default | Notes |
+| --- | --- | --- | --- |
+| `mcp.host` | `HOST` | `127.0.0.1` | Keep local unless you add your own protection. |
+| `mcp.port` | `PORT` | `3333` | Local HTTP port. |
+| `mcp.allowedRoots` | `CTM_ALLOWED_ROOTS` | project root | Array or comma-separated string of allowed workspace roots. |
+| `mcp.accessMode` | `CTM_ACCESS_MODE` | `review` | `review` or `full`. |
+| `mcp.denyGlobs` | `CTM_DENY_GLOBS` | built-in deny list | Extra deny rules as an array or comma-separated string. |
+| `mcp.maxReadBytes` | `CTM_MAX_READ_BYTES` | `200000` | Max bytes returned by file reads. |
+| `mcp.maxOutputBytes` | `CTM_MAX_OUTPUT_BYTES` | `200000` | Max bytes returned by shell/git output. |
+| `runtime.codexRuntimeRoot` | `CTM_CODEX_RUNTIME_ROOT` | Codex bundled runtime folder | Advanced override for Codex's bundled Node runtime search root. |
+| `runtime.fallbackNodeBin` | `OPENCLAW_NODE_BIN` | none | Optional folder containing `node.exe`. |
+| `runtime.npmCache` | `CTM_NPM_CACHE` | none | Optional npm cache folder location. |
+| `proxy.url` | `PROXY_URL`, `HTTP_PROXY`, `HTTPS_PROXY` | none | Optional outbound proxy for Node/web requests. |
+| `proxy.noProxy` | `NO_PROXY` | none | Hosts that should bypass the proxy. |
+| `proxy.nodeUseEnvProxy` | `NODE_USE_ENV_PROXY` | none | Set `true` for Node versions that honor env proxy settings. |
+| `web.enabled` | `CTM_WEB_TOOLS` | disabled | Enables optional `web_search` and `web_fetch`. `web_status` is always available. |
+| `web.searchProvider` | `CTM_SEARCH_PROVIDER` | `none` | `none` or `searxng`. Requires `web.enabled=true`. |
+| `web.searxngUrl` | `CTM_SEARXNG_URL` | none | SearXNG instance URL. Required when `searchProvider=searxng`. |
+| `web.maxBytes` | `CTM_WEB_MAX_BYTES` | `200000` | Max bytes returned by `web_fetch`. |
+| `web.timeoutMs` | `CTM_WEB_TIMEOUT_MS` | `15000` | Timeout for each web request. |
+| `sqlite.enabled` | `CTM_SQLITE_TOOLS` | disabled | Enables optional SQLite tools. |
+| `sqlite.allowedDbs` | `CTM_SQLITE_ALLOWED_DBS` | none | Array or comma-separated list of absolute SQLite database paths. |
+| `sqlite.maxRows` | `CTM_SQLITE_MAX_ROWS` | `100` | Max rows returned by SQLite tools. |
+| `environment` | any variable | none | Optional object for advanced environment defaults not covered above. |
+
+`config.json` should not contain tunnel runtime keys. Keep `CONTROL_PLANE_API_KEY` in your current environment, a local key file, or a private launcher.
 
 ### SQLite tools
 
