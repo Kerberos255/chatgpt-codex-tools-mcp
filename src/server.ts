@@ -138,7 +138,7 @@ function createMcpServer(): McpServer {
     {
       name: "chatgpt-codex-tools-mcp",
       title: "ChatGPT Codex Tools",
-      version: "0.4.3",
+      version: "0.4.4",
       description: "Codex-style local workspace tools for ChatGPT. Constrained local execution: edit files preview-then-confirm, read/search/tree for inspection, SQLite schema/select + structured change workflow, git status/diff, web search/fetch.",
     },
     {
@@ -171,7 +171,7 @@ function createMcpServer(): McpServer {
     async () => textResult(JSON.stringify({
       ok: true,
       name: "chatgpt-codex-tools-mcp",
-      version: "0.4.3",
+      version: "0.4.4",
       accessMode: config.accessMode,
       allowedRoots: config.allowedRoots,
       maxReadBytes: config.maxReadBytes,

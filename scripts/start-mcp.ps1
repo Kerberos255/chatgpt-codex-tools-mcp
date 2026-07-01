@@ -99,6 +99,9 @@ if (Test-Path -LiteralPath $ConfigPath) {
   }
 }
 
+# Keep the runtime server pointed at the exact same config file the launcher read.
+[Environment]::SetEnvironmentVariable("CTM_CONFIG_PATH", $ConfigPath, "Process")
+
 $mcpConfig = Get-ConfigProperty $config "mcp"
 $runtimeConfig = Get-ConfigProperty $config "runtime"
 $proxyConfig = Get-ConfigProperty $config "proxy"

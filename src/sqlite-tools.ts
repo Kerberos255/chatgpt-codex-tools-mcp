@@ -145,14 +145,15 @@ export function sqlitePreviewChange(config: Config, input: {
         break;
       }
       case "update": {
-        beforeRows = fetchRowsForWhere(db, change.table, change.where, undefined);
+        const limit = normalizeChangeLimit(change.limit);
+        beforeRows = fetchRowsForWhere(db, change.table, change.where, limit);
         const setDisplay = Object.entries(change.set).map(([k, v]) => `  SET ${k} = ${JSON.stringify(v)}`).join("\n");
         const afterRows = beforeRows.map((row) => applySetToRow(row, change.set));
         diff = formatBeforeAfter(beforeRows, afterRows, change.table, "UPDATE", setDisplay);
         break;
       }
       case "delete": {
-        beforeRows = fetchRowsForWhere(db, change.table, change.where, change.limit);
+        beforeRows = fetchRowsForWhere(db, change.table, change.where, normalizeChangeLimit(change.limit));
         diff = formatDeletePreview(beforeRows, change.table);
         break;
       }
@@ -190,30 +191,36 @@ export function sqliteConfirmChange(config: Config, actionId: string) {
         }
 
         case "update": {
-          // Re-verify expected fields
+          const limit = normalizeChangeLimit(change.limit);
+          const targetRowids = fetchTargetRowidsForWhere(db, change.table, change.where, limit);
+
           if (change.expected && Object.keys(change.expected).length > 0) {
-            const current = fetchRowsForWhere(db, change.table, change.where, undefined);
+            const current = fetchRowsByRowids(db, change.table, targetRowids);
             verifyExpected(current, change.expected);
           }
 
-          const limit = Math.min(change.limit ?? 1, 100);
-          const resolved = resolveSetAndWhere(change);
-          const sql = buildUpdateSql(change.table, resolved, limit);
-          const allParams = [...resolved.setParams, ...resolved.whereParams];
-          db.prepare(sql).run(...allParams);
+          if (targetRowids.length > 0) {
+            const resolved = resolveSetAndWhere(change);
+            const sql = buildUpdateSqlForRowids(change.table, resolved, targetRowids.length);
+            db.prepare(sql).run(...resolved.setParams, ...targetRowids);
+          }
           break;
         }
 
         case "delete": {
+          const limit = normalizeChangeLimit(change.limit);
+          const targetRowids = fetchTargetRowidsForWhere(db, change.table, change.where, limit);
+
           if (change.expected && Object.keys(change.expected).length > 0) {
-            const current = fetchRowsForWhere(db, change.table, change.where, undefined);
+            const current = fetchRowsByRowids(db, change.table, targetRowids);
             verifyExpected(current, change.expected);
           }
 
-          const limit = Math.min(change.limit ?? 1, 100);
-          const { whereClause, whereParams } = buildWhereClause(change.where);
-          const sql = `DELETE FROM ${quoteIdent(change.table)}${whereClause ? ` WHERE ${whereClause}` : ""} LIMIT ${limit}`;
-          db.prepare(sql).run(...whereParams);
+          if (targetRowids.length > 0) {
+            const placeholders = targetRowids.map(() => "?").join(", ");
+            const sql = `DELETE FROM ${quoteIdent(change.table)} WHERE rowid IN (${placeholders})`;
+            db.prepare(sql).run(...targetRowids);
+          }
           break;
         }
       }
@@ -364,12 +371,13 @@ function resolveSetAndWhere(change: SqliteUpdateChange): ResolvedSetAndWhere {
 
 // --- SQL builders ---
 
-function buildUpdateSql(table: string, resolved: ResolvedSetAndWhere, limit: number): string {
-  const parts = [`UPDATE ${quoteIdent(table)}`];
-  parts.push(`SET ${resolved.setClauses.join(", ")}`);
-  if (resolved.whereClause) parts.push(`WHERE ${resolved.whereClause}`);
-  parts.push(`LIMIT ${limit}`);
-  return parts.join(" ");
+function buildUpdateSqlForRowids(table: string, resolved: ResolvedSetAndWhere, rowidCount: number): string {
+  const placeholders = Array.from({ length: rowidCount }, () => "?").join(", ");
+  return `UPDATE ${quoteIdent(table)} SET ${resolved.setClauses.join(", ")} WHERE rowid IN (${placeholders})`;
+}
+
+function normalizeChangeLimit(limit: number | undefined): number {
+  return Math.min(limit ?? 1, 100);
 }
 
 // --- Fetch rows for WHERE ---
@@ -385,6 +393,34 @@ function fetchRowsForWhere(
   const sql = `SELECT * FROM ${quoteIdent(table)}${whereClause ? ` WHERE ${whereClause}` : ""}${limitClause}`;
   const stmt = db.prepare(sql);
   return whereParams.length > 0 ? stmt.all(...whereParams) : stmt.all();
+}
+
+function fetchTargetRowidsForWhere(
+  db: DatabaseSync,
+  table: string,
+  where: SqliteWhereCondition[],
+  limit: number,
+): number[] {
+  const { whereClause, whereParams } = buildWhereClause(where);
+  const sql = `SELECT rowid AS __ctm_rowid FROM ${quoteIdent(table)}${whereClause ? ` WHERE ${whereClause}` : ""} LIMIT ${limit}`;
+  const stmt = db.prepare(sql);
+  const rows = (whereParams.length > 0 ? stmt.all(...whereParams) : stmt.all()) as Record<string, unknown>[];
+  return rows.map((row) => normalizeRowid(row.__ctm_rowid));
+}
+
+function fetchRowsByRowids(db: DatabaseSync, table: string, rowids: number[]): Record<string, unknown>[] {
+  if (rowids.length === 0) return [];
+  const placeholders = rowids.map(() => "?").join(", ");
+  const sql = `SELECT * FROM ${quoteIdent(table)} WHERE rowid IN (${placeholders})`;
+  return db.prepare(sql).all(...rowids) as Record<string, unknown>[];
+}
+
+function normalizeRowid(value: unknown): number {
+  const rowid = typeof value === "bigint" ? Number(value) : Number(value);
+  if (!Number.isSafeInteger(rowid) || rowid < 1) {
+    throw new Error(`Unable to resolve SQLite rowid for limited change: ${String(value)}`);
+  }
+  return rowid;
 }
 
 // --- Apply set to a row (for preview diff) ---

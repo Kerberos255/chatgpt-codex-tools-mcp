@@ -221,7 +221,7 @@ start-tunnel.cmd    # 仅启动私有隧道（初始化后）
 
 ## 配置参考
 
-`config.json` 是启动器配置。`scripts/start-mcp.ps1` 会先把它映射为现有运行时环境变量，再启动 `dist/server.js`。
+`config.json` 是常规本地配置文件。`dist/server.js` 会直接读取它；`scripts/start-mcp.ps1` 也会在启动前把 runtime/proxy 等仅启动器需要的配置映射为环境变量。
 
 ```json
 {

@@ -221,7 +221,7 @@ start-tunnel.cmd    # private tunnel only, after initialization
 
 ## Configuration reference
 
-`config.json` is a launcher config. `scripts/start-mcp.ps1` maps it to the existing runtime environment variables before starting `dist/server.js`.
+`config.json` is the normal local configuration file. `dist/server.js` reads it directly, and `scripts/start-mcp.ps1` also maps launcher-only settings such as runtime/proxy values to environment variables before startup.
 
 ```json
 {

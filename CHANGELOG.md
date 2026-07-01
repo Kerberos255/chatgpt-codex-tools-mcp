@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.4.4 (2026-07-01)
+
+### Fixes
+
+- Fixed `sqlite_confirm_change` for update/delete on SQLite builds that do not support `UPDATE/DELETE ... LIMIT` by resolving target `rowid`s first and then applying bounded writes.
+- Limited SQLite update previews to the same default/max row bounds used by confirm.
+
+### Improvements
+
+- `dist/server.js` now reads `config.json` directly, so configurable feature flags such as `web.enabled` and `sqlite.enabled` work without relying only on the Windows launcher environment mapping.
+- `scripts/start-mcp.ps1` now passes its resolved config path to the runtime via `CTM_CONFIG_PATH`, keeping custom launcher config paths aligned with the server process.
+- Updated English and Chinese README configuration docs to clarify that `config.json` is the normal local config file, not only a launcher shim.
+
 ## v0.4.3 (2026-07-01)
 
 ### Improvements
