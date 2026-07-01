@@ -5,9 +5,7 @@ export interface GlobMatcherOptions {
 }
 
 export function createGlobMatcher(patternText: string, options: GlobMatcherOptions = {}): GlobMatcher {
-  const patterns = splitTopLevel(patternText, ",")
-    .map((entry) => normalizeGlobPattern(entry))
-    .filter(Boolean);
+  const patterns = splitGlobPatterns(patternText);
   const regexes = patterns.map((pattern) => new RegExp(`^${globToRegexSource(pattern)}$`, "i"));
 
   return (path: string) => {
@@ -15,6 +13,12 @@ export function createGlobMatcher(patternText: string, options: GlobMatcherOptio
     const basename = normalized.split("/").pop() ?? normalized;
     return regexes.some((regex) => regex.test(normalized) || Boolean(options.matchBasename && regex.test(basename)));
   };
+}
+
+export function splitGlobPatterns(patternText: string): string[] {
+  return splitTopLevel(patternText, ",")
+    .map((entry) => normalizeGlobPattern(entry))
+    .filter(Boolean);
 }
 
 function normalizeGlobPattern(value: string): string {

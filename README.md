@@ -53,11 +53,11 @@ The default public template uses **No Authentication** at the MCP app layer. Thi
 | `open_workspace` | Open a local project folder under `CTM_ALLOWED_ROOTS` and get a reusable workspaceId. |
 | `list_dir` | List files in an open workspace. |
 | `read_file` | Read a UTF-8 text file with output caps. |
-| `search_files` | Full-text search in a workspace. Supports caseSensitive, contextLines, maxMatches, include/exclude globs. |
+| `search_files` | Full-text search in a workspace. Uses `rg` when available. Supports caseSensitive, contextLines, maxMatches, include/exclude globs. |
 | `find_files` | Find files by glob pattern (e.g. `*.ts`, `**/config*`). |
 | `project_tree` | Show a visual directory tree (depth-limited, skips node_modules/dist/.git). |
 | `git_status` | Run `git status --short`. |
-| `git_diff` | Run `git diff --stat` and `git diff`. |
+| `git_diff` | Review unstaged or staged git diffs, optionally stat-only or scoped to a path. |
 | `preview_edit` | **(recommended)** Create a pending multi-file edit batch. Supports replace_text, replace_range, insert_before, insert_after, append, create, overwrite, rename, delete. |
 | `confirm_edit` | Apply a pending edit batch by action id. |
 | `preview_shell` | Queue a shell command for review. |
@@ -314,11 +314,20 @@ Supported edit types (`changes[].type`):
 
 ### Search globs
 
-`search_files.include`, `search_files.exclude`, and `find_files.pattern` accept common glob patterns:
+`search_files` uses ripgrep (`rg`) when available, then falls back to a built-in Node search. `search_files.include`, `search_files.exclude`, and `find_files.pattern` accept common glob patterns:
 
 - `*.ts` matches basenames anywhere in the searched tree.
 - `src/**/*.ts` matches both `src/app.ts` and nested files such as `src/lib/app.ts`.
 - Comma-separated patterns and brace alternatives are supported, for example `*.ts,*.tsx` or `{*.ts,*.tsx}`.
+
+### Git diff options
+
+`git_diff` defaults to unstaged `git diff --stat` plus full `git diff`. Optional inputs:
+
+- `staged: true` reads staged/cached changes.
+- `path: "src/server.ts"` limits diff output to a file or directory.
+- `statOnly: true` returns only `git diff --stat`.
+- `maxBytes` lowers the output cap for large diffs.
 
 ---
 

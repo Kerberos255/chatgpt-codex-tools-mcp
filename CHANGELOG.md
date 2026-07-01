@@ -1,6 +1,14 @@
 # Changelog
 
-## v0.4.1 (Unreleased)
+## v0.4.2 (2026-07-01)
+
+### Improvements
+
+- `git_diff` now supports `staged`, `path`, `statOnly`, and `maxBytes` parameters.
+- `search_files` now uses ripgrep (`rg`) when available, with the existing Node search as a fallback.
+- `search_files` passes include/exclude globs and deny globs to ripgrep, while still filtering denied paths before returning output.
+
+## v0.4.1
 
 ### Breaking changes
 

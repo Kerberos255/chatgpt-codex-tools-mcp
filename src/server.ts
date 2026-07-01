@@ -7,10 +7,10 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import * as z from "zod/v4";
 import { loadConfig } from "./config.js";
-import { createGlobMatcher, type GlobMatcher } from "./globs.js";
+import { createGlobMatcher, splitGlobPatterns, type GlobMatcher } from "./globs.js";
 import { assertNotDenied, relativeDisplayPath } from "./paths.js";
 import { EditStore, type Change, previewChanges, applyChanges } from "./edit-store.js";
-import { assertCommandAllowed, runCommand } from "./process-runner.js";
+import { assertCommandAllowed, runCommand, runProcess, type ProcessResult } from "./process-runner.js";
 import { redactText, redactValue } from "./redaction.js";
 import {
   sqliteStatus,
@@ -138,7 +138,7 @@ function createMcpServer(): McpServer {
     {
       name: "chatgpt-codex-tools-mcp",
       title: "ChatGPT Codex Tools",
-      version: "0.4.1",
+      version: "0.4.2",
       description: "Codex-style local workspace tools for ChatGPT. Constrained local execution: edit files preview-then-confirm, read/search/tree for inspection, SQLite schema/select + structured change workflow, git status/diff, web search/fetch.",
     },
     {
@@ -171,7 +171,7 @@ function createMcpServer(): McpServer {
     async () => textResult(JSON.stringify({
       ok: true,
       name: "chatgpt-codex-tools-mcp",
-      version: "0.4.1",
+      version: "0.4.2",
       accessMode: config.accessMode,
       allowedRoots: config.allowedRoots,
       maxReadBytes: config.maxReadBytes,
@@ -274,7 +274,7 @@ function createMcpServer(): McpServer {
     "search_files",
     {
       title: "Search files",
-      description: "Search text content inside a workspace. Skips node_modules, dist, .git, and denied paths. Supports optional case-sensitivity, context lines, max matches, include/exclude path globs.",
+      description: "Search text content inside a workspace. Uses ripgrep when available, with a Node fallback. Skips node_modules, dist, .git, and denied paths. Supports optional case-sensitivity, context lines, max matches, include/exclude path globs.",
       inputSchema: {
         workspaceId: z.string(),
         pattern: z.string().describe("Text pattern to search for (case-insensitive by default)."),
@@ -300,6 +300,8 @@ function createMcpServer(): McpServer {
         caseSensitive,
         contextLines,
         maxMatches,
+        include,
+        exclude,
         includeMatcher,
         excludeMatcher,
       );
@@ -383,12 +385,27 @@ function createMcpServer(): McpServer {
     "git_diff",
     {
       title: "Git diff",
-      description: "Run git diff --stat and git diff for unstaged changes. Use to review modifications before committing.",
-      inputSchema: { workspaceId: z.string() },
+      description: "Review git diffs. Defaults to unstaged stat + full diff. Can inspect staged changes, a single path, stat-only output, and smaller output caps.",
+      inputSchema: {
+        workspaceId: z.string(),
+        staged: z.boolean().default(false).describe("Show staged/cached changes instead of unstaged changes."),
+        path: z.string().optional().describe("Optional file or directory path relative to the workspace root."),
+        statOnly: z.boolean().default(false).describe("Return only git diff --stat, not the full patch."),
+        maxBytes: z.number().int().positive().max(config.maxOutputBytes).default(config.maxOutputBytes).describe("Maximum stdout/stderr bytes returned."),
+      },
       annotations: { readOnlyHint: true },
-      outputSchema: z.object({ result: z.string(), stdout: z.string(), stderr: z.string(), exitCode: z.number().nullable(), timedOut: z.boolean() }),
+      outputSchema: z.object({
+        result: z.string(),
+        stdout: z.string(),
+        stderr: z.string(),
+        exitCode: z.number().nullable(),
+        timedOut: z.boolean(),
+        staged: z.boolean(),
+        path: z.string().optional(),
+        statOnly: z.boolean(),
+      }),
     },
-    async ({ workspaceId }) => gitTool(workspaceId, "git diff --stat && git diff"),
+    async ({ workspaceId, staged, path, statOnly, maxBytes }) => gitDiffTool(workspaceId, { staged, path, statOnly, maxBytes }),
   );
 
   // ============================================================
@@ -793,6 +810,71 @@ async function gitTool(workspaceId: string, command: string) {
   return textResult(formatProcessResult(result), result);
 }
 
+async function gitDiffTool(
+  workspaceId: string,
+  options: { staged: boolean; path?: string; statOnly: boolean; maxBytes: number },
+) {
+  const workspace = workspaces.get(workspaceId);
+  const maxBytes = Math.min(options.maxBytes ?? config.maxOutputBytes, config.maxOutputBytes);
+  let pathspec: string | undefined;
+
+  if (options.path) {
+    const { absolutePath } = workspaces.resolve(workspaceId, options.path);
+    assertNotDenied(absolutePath, workspace.root, config.denyGlobs);
+    pathspec = relativeDisplayPath(workspace.root, absolutePath);
+  }
+
+  const baseArgs = ["diff"];
+  if (options.staged) baseArgs.push("--cached");
+  const pathArgs = pathspec ? ["--", pathspec] : [];
+
+  const statResult = await runProcess({
+    command: "git",
+    args: [...baseArgs, "--stat", ...pathArgs],
+    cwd: workspace.root,
+    timeoutMs: 30_000,
+    maxOutputBytes: maxBytes,
+  });
+
+  if (statResult.exitCode !== 0 || options.statOnly) {
+    return textResult(formatProcessResult(statResult), {
+      ...statResult,
+      staged: options.staged,
+      path: pathspec,
+      statOnly: options.statOnly,
+    });
+  }
+
+  const diffResult = await runProcess({
+    command: "git",
+    args: [...baseArgs, ...pathArgs],
+    cwd: workspace.root,
+    timeoutMs: 30_000,
+    maxOutputBytes: maxBytes,
+  });
+  const result = combineProcessResults([statResult, diffResult], maxBytes);
+  return textResult(formatProcessResult(result), {
+    ...result,
+    staged: options.staged,
+    path: pathspec,
+    statOnly: options.statOnly,
+  });
+}
+
+function combineProcessResults(results: ProcessResult[], maxBytes: number): ProcessResult {
+  return {
+    stdout: capText(results.map((result) => result.stdout.trimEnd()).filter(Boolean).join("\n\n"), maxBytes),
+    stderr: capText(results.map((result) => result.stderr.trimEnd()).filter(Boolean).join("\n\n"), maxBytes),
+    exitCode: results.find((result) => result.exitCode !== 0)?.exitCode ?? results[results.length - 1]?.exitCode ?? null,
+    timedOut: results.some((result) => result.timedOut),
+  };
+}
+
+function capText(text: string, maxBytes: number): string {
+  if (Buffer.byteLength(text, "utf8") <= maxBytes) return text;
+  return text.slice(0, maxBytes) + "\n[output truncated]\n";
+}
+
 // --- Result helper ---
 
 function textResult(text: string, structuredContent: object = {}) {
@@ -821,9 +903,23 @@ async function searchTextFiles(
   caseSensitive: boolean,
   contextLines: number,
   maxMatches: number,
+  includePatternText: string | undefined,
+  excludePatternText: string | undefined,
   includeMatcher: GlobMatcher | null,
   excludeMatcher: GlobMatcher | null,
 ): Promise<string> {
+  const ripgrepOutput = await searchTextFilesWithRipgrep(
+    workspaceRoot,
+    startPath,
+    pattern,
+    caseSensitive,
+    contextLines,
+    maxMatches,
+    includePatternText,
+    excludePatternText,
+  );
+  if (ripgrepOutput !== null) return ripgrepOutput;
+
   const needle = caseSensitive ? pattern : pattern.toLowerCase();
   const lines: string[] = [];
   let outputBytes = 0;
@@ -902,6 +998,95 @@ async function searchTextFiles(
     lines.push(line);
     outputBytes += Buffer.byteLength(line, "utf8") + 1;
   }
+}
+
+async function searchTextFilesWithRipgrep(
+  workspaceRoot: string,
+  startPath: string,
+  pattern: string,
+  caseSensitive: boolean,
+  contextLines: number,
+  maxMatches: number,
+  includePatternText: string | undefined,
+  excludePatternText: string | undefined,
+): Promise<string | null> {
+  const pathArg = startPath === workspaceRoot ? "." : relative(workspaceRoot, startPath).replace(/\\/g, "/");
+  const args = [
+    "--color",
+    "never",
+    "--line-number",
+    "--no-heading",
+    "--with-filename",
+    "--fixed-strings",
+  ];
+  if (!caseSensitive) args.push("--ignore-case");
+  if (contextLines > 0) args.push("--context", String(contextLines));
+
+  for (const glob of ["node_modules/**", "dist/**", ".git/**"]) {
+    args.push("--glob", `!${glob}`);
+  }
+  for (const glob of config.denyGlobs) {
+    args.push("--glob", `!${glob.replace(/\\/g, "/")}`);
+  }
+  for (const glob of splitGlobPatterns(includePatternText ?? "")) {
+    args.push("--glob", glob);
+  }
+  for (const glob of splitGlobPatterns(excludePatternText ?? "")) {
+    args.push("--glob", `!${glob}`);
+  }
+  args.push("--", pattern, pathArg);
+
+  const result = await runProcess({
+    command: "rg",
+    args,
+    cwd: workspaceRoot,
+    timeoutMs: 30_000,
+    maxOutputBytes: config.maxOutputBytes,
+  });
+
+  if (result.exitCode === null && /enoent|not found|could not be found/i.test(result.stderr)) return null;
+  if (result.exitCode === 1) return "";
+  if (result.exitCode !== 0) return null;
+
+  const lines = result.stdout.split(/\r?\n/).filter((line) => line.length > 0);
+  const filteredLines = filterRipgrepOutputLines(workspaceRoot, lines, maxMatches);
+  return capText(filteredLines.join("\n"), config.maxOutputBytes);
+}
+
+function filterRipgrepOutputLines(workspaceRoot: string, lines: string[], maxLines: number): string[] {
+  const output: string[] = [];
+  for (const line of lines) {
+    const relPath = parseRipgrepOutputPath(line);
+    if (relPath) {
+      try {
+        assertNotDenied(join(workspaceRoot, relPath), workspaceRoot, config.denyGlobs);
+      } catch {
+        continue;
+      }
+    }
+    if (line === "--" && (output.length === 0 || output[output.length - 1] === "--")) continue;
+    output.push(normalizeRipgrepOutputLine(line));
+    if (output.length >= maxLines) break;
+  }
+  while (output[output.length - 1] === "--") output.pop();
+  return output;
+}
+
+function parseRipgrepOutputPath(line: string): string | null {
+  const match = /^(.+?)(?::|-)\d+(?::|-)/.exec(line);
+  return match ? normalizeToolPath(match[1]) : null;
+}
+
+function normalizeRipgrepOutputLine(line: string): string {
+  const match = /^(.+?)(?=[:|-]\d+[:|-])/.exec(line);
+  if (!match) return line;
+  return `${normalizeToolPath(match[1])}${line.slice(match[1].length)}`;
+}
+
+function normalizeToolPath(path: string): string {
+  let normalized = path.replace(/\\/g, "/");
+  while (normalized.startsWith("./")) normalized = normalized.slice(2);
+  return normalized;
 }
 
 // --- find_files helpers ---

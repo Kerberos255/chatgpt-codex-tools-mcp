@@ -53,11 +53,11 @@ ChatGPT 自定义连接器
 | `open_workspace` | 在 `CTM_ALLOWED_ROOTS` 下打开一个本地项目目录，获取可复用的 workspaceId。 |
 | `list_dir` | 列出打开的工作区中的文件。 |
 | `read_file` | 读取 UTF-8 文本文件，带输出大小限制。 |
-| `search_files` | 在工作区内全文搜索。支持大小写、上下文行数、最大匹配数和包含/排除 glob 模式。 |
+| `search_files` | 在工作区内全文搜索。可用时优先使用 `rg`。支持大小写、上下文行数、最大匹配数和包含/排除 glob 模式。 |
 | `find_files` | 通过 glob 模式查找文件（如 `*.ts`、`**/config*`）。 |
 | `project_tree` | 展示可视化的目录树（限制深度，跳过 node_modules/dist/.git）。 |
 | `git_status` | 运行 `git status --short`。 |
-| `git_diff` | 运行 `git diff --stat` 和 `git diff`。 |
+| `git_diff` | 查看未暂存或已暂存的 Git diff，可只看统计或限定到某个路径。 |
 | `preview_edit` | **（推荐）** 创建待处理的多文件编辑批次。支持 replace_text、replace_range、insert_before、insert_after、append、create、overwrite、rename、delete。 |
 | `confirm_edit` | 按 actionId 应用待处理的编辑批次。 |
 | `preview_shell` | 将 Shell 命令加入审批队列。 |
@@ -314,11 +314,20 @@ confirm_edit  →  应用批次中的所有修改
 
 ### 搜索 glob
 
-`search_files.include`、`search_files.exclude` 和 `find_files.pattern` 支持常见 glob 模式：
+`search_files` 可用时会优先使用 ripgrep（`rg`），找不到 `rg` 时回退到内置 Node 搜索。`search_files.include`、`search_files.exclude` 和 `find_files.pattern` 支持常见 glob 模式：
 
 - `*.ts` 会匹配搜索树下任意位置的文件名。
 - `src/**/*.ts` 会同时匹配 `src/app.ts` 和 `src/lib/app.ts` 这类嵌套文件。
 - 支持逗号分隔模式和花括号候选，例如 `*.ts,*.tsx` 或 `{*.ts,*.tsx}`。
+
+### Git diff 选项
+
+`git_diff` 默认返回未暂存的 `git diff --stat` 加完整 `git diff`。可选输入：
+
+- `staged: true` 查看已暂存/cached 的修改。
+- `path: "src/server.ts"` 将 diff 限定到某个文件或目录。
+- `statOnly: true` 只返回 `git diff --stat`。
+- `maxBytes` 为大型 diff 设置更小的输出上限。
 
 ---
 

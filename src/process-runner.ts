@@ -101,6 +101,59 @@ export async function runCommand(input: {
   });
 }
 
+export async function runProcess(input: {
+  command: string;
+  args: string[];
+  cwd: string;
+  timeoutMs: number;
+  maxOutputBytes: number;
+}): Promise<ProcessResult> {
+  return new Promise((resolve) => {
+    const child = spawn(input.command, input.args, {
+      cwd: input.cwd,
+      shell: false,
+      windowsHide: true,
+      env: scrubEnv(process.env),
+    });
+
+    let stdout = "";
+    let stderr = "";
+    let timedOut = false;
+    let settled = false;
+    let timer: NodeJS.Timeout;
+
+    const finish = (result: ProcessResult) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(result);
+    };
+
+    timer = setTimeout(() => {
+      timedOut = true;
+      child.kill("SIGTERM");
+    }, input.timeoutMs);
+
+    child.stdout?.on("data", (chunk: Buffer) => {
+      stdout = appendCapped(stdout, chunk.toString("utf8"), input.maxOutputBytes);
+    });
+    child.stderr?.on("data", (chunk: Buffer) => {
+      stderr = appendCapped(stderr, chunk.toString("utf8"), input.maxOutputBytes);
+    });
+    child.on("error", (error) => {
+      finish({
+        stdout,
+        stderr: appendCapped(stderr, error.message, input.maxOutputBytes),
+        exitCode: null,
+        timedOut,
+      });
+    });
+    child.on("close", (exitCode) => {
+      finish({ stdout, stderr, exitCode, timedOut });
+    });
+  });
+}
+
 function appendCapped(current: string, next: string, maxBytes: number): string {
   const combined = current + next;
   if (Buffer.byteLength(combined, "utf8") <= maxBytes) return combined;
