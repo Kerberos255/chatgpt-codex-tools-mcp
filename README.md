@@ -4,7 +4,7 @@
 
 Codex-style local workspace tools exposed to ChatGPT through MCP.
 
-ChatGPT does the reasoning. This server only provides constrained local tools: open a workspace, list/read/search/tree files, inspect git state, preview-then-confirm file edits, run a small allowlisted set of local commands, and optionally query/change SQLite databases with a structured preview-then-confirm workflow.
+ChatGPT does the reasoning. This server only provides constrained local tools: open a workspace, list/read/search/tree files, inspect git state, preview-then-confirm file edits, run structured local processes without exposing a shell, and optionally query/change SQLite databases with a structured preview-then-confirm workflow.
 
 > Not affiliated with OpenAI or Codex. This is a community/local tool layer that behaves like a small Codex-style toolbox for ChatGPT.
 
@@ -37,7 +37,7 @@ The default public template uses **No Authentication** at the MCP app layer. Thi
 - Read/list/search/find/tree tools for inspection.
 - Preview-then-confirm file editing with 9 edit types and multi-file batches.
 - Git status/diff tools for review.
-- `review` mode shell allowlist for low-risk verification commands.
+- Structured foreground/background process tools (`exec_process`, `process_start`, `process_read`, `process_stop`) with argv arrays and no shell syntax.
 - Best-effort secret redaction on tool output.
 - Windows-friendly helper script that can reuse Codex's bundled Node runtime if present.
 - Optional web tools (disabled by default): SearXNG search and public HTTP fetch.
@@ -47,30 +47,31 @@ The default public template uses **No Authentication** at the MCP app layer. Thi
 
 ## Tools exposed to ChatGPT
 
-| Tool | Purpose |
-| --- | --- |
-| `local_status` | Server status, access mode, allowed roots, caps, and feature flags. |
-| `open_workspace` | Open a local project folder under `CTM_ALLOWED_ROOTS` and get a reusable workspaceId. |
-| `list_dir` | List files in an open workspace. |
-| `read_file` | Read a UTF-8 text file with output caps. |
-| `search_files` | Full-text search in a workspace. Uses `rg` when available. Supports caseSensitive, contextLines, maxMatches, include/exclude globs. |
-| `find_files` | Find files by glob pattern (e.g. `*.ts`, `**/config*`). |
-| `project_tree` | Show a visual directory tree (depth-limited, skips node_modules/dist/.git). |
-| `git_status` | Run `git status --short`. |
-| `git_diff` | Review unstaged or staged git diffs, optionally stat-only or scoped to a path. |
-| `preview_edit` | **(recommended)** Create a pending multi-file edit batch. Supports replace_text, replace_range, insert_before, insert_after, append, create, overwrite, rename, delete. |
-| `confirm_edit` | Apply a pending edit batch by action id. |
-| `preview_shell` | Queue a shell command for review. |
-| `confirm_shell` | Execute a queued shell command. |
-| `shell` | Run a local command, restricted by `CTM_ACCESS_MODE`. |
-| `sqlite_status` | Show SQLite tools configuration. Always available. |
-| `sqlite_schema` * | Inspect schema for an allowlisted database. |
-| `sqlite_select` * | Run one read-only `SELECT`/`WITH` or safe `PRAGMA`. |
-| `sqlite_preview_change` * | Preview a structured insert/update/delete on an allowed database. Supports jsonSet via dot-path keys (e.g. `job_json.enabled`). Does not write until confirmed. |
-| `sqlite_confirm_change` * | Apply a pending SQLite change by action id. Re-verifies 'expected' fields before writing. |
-| `web_status` | Show web tools configuration. Always available. |
-| `web_search` * | Search the web via SearXNG. |
-| `web_fetch` * | Fetch a public HTTP(S) page. Blocks localhost, private networks, and credentials. |
+| Type | Tool | Purpose |
+| --- | --- | --- |
+| Meta | `local_status` | Server status, access mode, allowed roots, caps, feature flags, and tool groups. |
+| Workspace | `open_workspace` | Open a local project folder under `CTM_ALLOWED_ROOTS` and get a reusable workspaceId. |
+| Read | `list_dir` | List files in an open workspace. |
+| Read | `read_file` | Read a UTF-8 text file with output caps. |
+| Read | `search_files` | Full-text search in a workspace. Uses `rg` when available. Supports caseSensitive, contextLines, maxMatches, include/exclude globs. |
+| Read | `find_files` | Find files by glob pattern (e.g. `*.ts`, `**/config*`). |
+| Read | `project_tree` | Show a visual directory tree (depth-limited, skips node_modules/dist/.git). |
+| Git | `git_status` | Run `git status --short` through the structured process runner. |
+| Git | `git_diff` | Review unstaged or staged git diffs, optionally stat-only or scoped to a path. |
+| Edit/write | `preview_edit` | **(recommended)** Create a pending multi-file edit batch. Supports replace_text, replace_range, insert_before, insert_after, append, create, overwrite, rename, delete. |
+| Edit/write | `confirm_edit` | Apply a pending edit batch by action id. |
+| Exec | `exec_process` | Run a short foreground executable with `command` + `args[]`, no shell. |
+| Process | `process_start` | Start a long-running executable with `command` + `args[]`, no shell. |
+| Process | `process_read` | Read stdout/stderr/exit state for a managed process. |
+| Process | `process_stop` | Stop a managed process. |
+| SQLite | `sqlite_status` | Show SQLite tools configuration. Always available. |
+| SQLite | `sqlite_schema` * | Inspect schema for an allowlisted database. |
+| SQLite | `sqlite_select` * | Run one read-only `SELECT`/`WITH` or safe `PRAGMA`. |
+| SQLite | `sqlite_preview_change` * | Preview a structured insert/update/delete on an allowed database. Supports jsonSet via dot-path keys (e.g. `job_json.enabled`). Does not write until confirmed. |
+| SQLite | `sqlite_confirm_change` * | Apply a pending SQLite change by action id. Re-verifies 'expected' fields before writing. |
+| Web | `web_status` | Show web tools configuration. Always available. |
+| Web | `web_search` * | Search the web via SearXNG. |
+| Web | `web_fetch` * | Fetch a public HTTP(S) page. Blocks localhost, private networks, and credentials. |
 
 \* _Optional tools, disabled by default unless their matching feature flag is enabled._
 
@@ -95,11 +96,11 @@ Important rules:
 - Use this behind a private tunnel rather than a public URL.
 - In ChatGPT connector setup, choose **No Authentication** / **未授权**.
 - Treat output redaction as a safety net, not a replacement for narrow `CTM_ALLOWED_ROOTS`, deny rules, and SQLite allowlists.
-- Large edit, shell, and SQLite change payloads are rejected; split them into smaller preview calls.
+- Large edit and SQLite change payloads are rejected; split them into smaller preview calls.
 
-`review` mode blocks dangerous command patterns and only allows a small set of inspection/test commands such as `git status`, `git diff`, `dir`, `ls`, `node --version`, and `npm run ...`.
+No shell tool is exposed. Use specialized tools first (`read_file`, `search_files`, `git_status`, `git_diff`, `preview_edit`, SQLite tools). For commands that truly need a process, use `exec_process` or `process_start` with a `command` and `args[]` array. Shell syntax such as pipes, redirects, glob expansion, command chaining, and shell builtins is not supported.
 
-Commands that write to git history or publish to a remote, such as `git add`, `git commit`, `git remote`, `git push`, and `gh repo create`, are not allowed through direct shell in `review` mode. They must go through `preview_shell` first and then `confirm_shell` with the returned action id.
+`review` mode blocks dangerous process patterns and only allows a small set of inspection/test executables such as `git status`, `git diff`, `rg`, `pytest`, version checks for Node/Python, and package-manager `test`/`run` commands. `full` mode still blocks direct shell executables such as `cmd`, `powershell`, `pwsh`, `sh`, and `bash`.
 
 ---
 
@@ -268,7 +269,7 @@ start-tunnel.cmd    # private tunnel only, after initialization
 | `mcp.accessMode` | `CTM_ACCESS_MODE` | `review` | `review` or `full`. |
 | `mcp.denyGlobs` | `CTM_DENY_GLOBS` | built-in deny list | Extra deny rules as an array or comma-separated string. |
 | `mcp.maxReadBytes` | `CTM_MAX_READ_BYTES` | `200000` | Max bytes returned by file reads. |
-| `mcp.maxOutputBytes` | `CTM_MAX_OUTPUT_BYTES` | `200000` | Max bytes returned by shell/git output. |
+| `mcp.maxOutputBytes` | `CTM_MAX_OUTPUT_BYTES` | `200000` | Max bytes returned by process/git output. |
 | `runtime.codexRuntimeRoot` | `CTM_CODEX_RUNTIME_ROOT` | Codex bundled runtime folder | Advanced override for Codex's bundled Node runtime search root. |
 | `runtime.fallbackNodeBin` | `OPENCLAW_NODE_BIN` | none | Optional folder containing `node.exe`. |
 | `runtime.npmCache` | `CTM_NPM_CACHE` | none | Optional npm cache folder location. |
@@ -376,9 +377,9 @@ Create a fresh connector and choose **No Authentication / 未授权**. Old conne
 
 Add the project parent folder to `CTM_ALLOWED_ROOTS`, then restart the MCP server.
 
-### Shell command is blocked
+### Process command is blocked
 
-You are in `review` mode. Use read/search/git/edit tools where possible. Only switch to `full` for trusted local use.
+Use read/search/git/edit/SQLite tools where possible. For execution, pass a real executable and `args[]` to `exec_process` or `process_start`; shell syntax and shell executables are intentionally unavailable.
 
 ### SQLite tools are not available
 

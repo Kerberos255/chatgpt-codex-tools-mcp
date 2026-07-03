@@ -10,7 +10,8 @@ import { loadConfig } from "./config.js";
 import { createGlobMatcher, splitGlobPatterns, type GlobMatcher } from "./globs.js";
 import { assertNotDenied, relativeDisplayPath } from "./paths.js";
 import { EditStore, type Change, previewChanges, applyChanges } from "./edit-store.js";
-import { assertCommandAllowed, runCommand, runProcess, type ProcessResult } from "./process-runner.js";
+import { ManagedProcessStore, type ManagedProcessSnapshot } from "./managed-processes.js";
+import { assertProcessAllowed, runProcess, type ProcessResult } from "./process-runner.js";
 import { redactText, redactValue } from "./redaction.js";
 import {
   sqliteStatus,
@@ -22,57 +23,31 @@ import {
 import { webFetch, webSearch, webStatus } from "./web.js";
 import { WorkspaceRegistry } from "./workspaces.js";
 
+const SERVER_VERSION = "0.4.5";
+
+const TOOL_GROUPS = [
+  { type: "meta", tools: ["local_status"] },
+  { type: "workspace", tools: ["open_workspace"] },
+  { type: "read", tools: ["list_dir", "read_file", "search_files", "find_files", "project_tree"] },
+  { type: "git", tools: ["git_status", "git_diff"] },
+  { type: "edit_write", tools: ["preview_edit", "confirm_edit"] },
+  { type: "exec", tools: ["exec_process"] },
+  { type: "process", tools: ["process_start", "process_read", "process_stop"] },
+  { type: "sqlite", tools: ["sqlite_status", "sqlite_schema", "sqlite_select", "sqlite_preview_change", "sqlite_confirm_change"] },
+  { type: "web", tools: ["web_status", "web_search", "web_fetch"] },
+];
+
 const config = loadConfig();
 const workspaces = new WorkspaceRegistry(config);
 const edits = new EditStore();
-
-// --- Pending shell action store ---
-
-interface PendingShellAction {
-  id: string;
-  workspaceId: string;
-  command: string;
-  workingDirectory: string;
-  timeoutSeconds: number;
-  createdAt: number;
-}
-
-class ShellActionStore {
-  private readonly actions = new Map<string, PendingShellAction>();
-
-  create(input: Omit<PendingShellAction, "id" | "createdAt">): PendingShellAction {
-    const action = { ...input, id: `act_${randomUUID()}`, createdAt: Date.now() };
-    this.actions.set(action.id, action);
-    return action;
-  }
-
-  take(actionId: string): PendingShellAction {
-    const action = this.actions.get(actionId);
-    if (!action) throw new Error(`Unknown shell actionId: ${actionId}`);
-    this.actions.delete(actionId);
-    return action;
-  }
-}
-
-const shellActions = new ShellActionStore();
+const managedProcesses = new ManagedProcessStore();
 
 const payloadLimits = {
   previewEditMaxChanges: 20,
   previewEditMaxTextBytesPerChange: 32_000,
   previewEditMaxTotalTextBytes: 120_000,
-  previewShellMaxCommandChars: 800,
   sqliteChangeMaxPayloadBytes: 32_000,
 };
-
-const blockedShellPayloadPatterns = [
-  /frombase64string/i,
-  /writeallbytes/i,
-  /encodedcommand/i,
-  /set-content/i,
-  /add-content/i,
-  /out-file/i,
-  /@['"]/,
-];
 
 function byteLength(value: string): number {
   return Buffer.byteLength(value, "utf8");
@@ -107,15 +82,6 @@ function assertPreviewEditPayload(changes: unknown[]): void {
   }
 }
 
-function assertPreviewShellPayload(command: string): void {
-  if (command.length > payloadLimits.previewShellMaxCommandChars) {
-    throw new Error(`preview_shell command is too long (${command.length} chars). Use smaller commands or preview_edit for file changes.`);
-  }
-  if (blockedShellPayloadPatterns.some((pattern) => pattern.test(command))) {
-    throw new Error("preview_shell blocks bulk write/encoded payload patterns. Use preview_edit with small changes instead.");
-  }
-}
-
 function assertSqliteChangePayload(change: unknown): void {
   assertMaxBytes("sqlite_preview_change payload", JSON.stringify(change), payloadLimits.sqliteChangeMaxPayloadBytes);
 }
@@ -138,8 +104,8 @@ function createMcpServer(): McpServer {
     {
       name: "chatgpt-codex-tools-mcp",
       title: "ChatGPT Codex Tools",
-      version: "0.4.4",
-      description: "Codex-style local workspace tools for ChatGPT. Constrained local execution: edit files preview-then-confirm, read/search/tree for inspection, SQLite schema/select + structured change workflow, git status/diff, web search/fetch.",
+      version: SERVER_VERSION,
+      description: "Codex-style local workspace tools for ChatGPT. Constrained local execution: edit files preview-then-confirm, read/search/tree for inspection, SQLite schema/select + structured change workflow, git status/diff, structured process execution, web search/fetch.",
     },
     {
       instructions:
@@ -149,9 +115,9 @@ function createMcpServer(): McpServer {
         "3. `git_status`/`git_diff` to review local changes.\n" +
         "4. For edits: use `preview_edit` with one or more changes, then `confirm_edit` with the returned action_id.\n" +
         "5. For SQLite: use `sqlite_schema`/`sqlite_select` for reading, `sqlite_preview_change`/`sqlite_confirm_change` for structured writes.\n" +
-        "6. For SHELL: use `preview_shell` then `confirm_shell` for write/publish commands; use `shell` only for low-risk verification.\n" +
+        "6. For execution: prefer `exec_process` for short foreground commands and `process_start`/`process_read`/`process_stop` for long-running commands. Commands use structured argv; shell syntax, pipes, redirection, and shell builtins are not supported.\n" +
         "7. For web: use `web_search` (SearXNG) and `web_fetch` (public HTTP, blocks local/private networks).\n" +
-        "Use preview-then-confirm for all writes (file edits, SQLite changes, shell commands).",
+        "Use preview-then-confirm for all writes where a paired preview tool exists (file edits, SQLite changes).",
     },
   );
 
@@ -171,9 +137,10 @@ function createMcpServer(): McpServer {
     async () => textResult(JSON.stringify({
       ok: true,
       name: "chatgpt-codex-tools-mcp",
-      version: "0.4.4",
+      version: SERVER_VERSION,
       accessMode: config.accessMode,
       allowedRoots: config.allowedRoots,
+      toolGroups: TOOL_GROUPS,
       maxReadBytes: config.maxReadBytes,
       maxOutputBytes: config.maxOutputBytes,
       webToolsEnabled: config.webToolsEnabled,
@@ -374,7 +341,7 @@ function createMcpServer(): McpServer {
       annotations: { readOnlyHint: true },
       outputSchema: z.object({ result: z.string(), stdout: z.string(), stderr: z.string(), exitCode: z.number().nullable(), timedOut: z.boolean() }),
     },
-    async ({ workspaceId }) => gitTool(workspaceId, "git status --short"),
+    async ({ workspaceId }) => gitTool(workspaceId, ["status", "--short"]),
   );
 
   // ============================================================
@@ -493,107 +460,99 @@ function createMcpServer(): McpServer {
   );
 
   // ============================================================
-  // preview_shell / confirm_shell / shell
+  // Structured local execution: foreground and managed processes
   // ============================================================
 
   server.registerTool(
-    "preview_shell",
+    "exec_process",
     {
-      title: "Preview shell command",
-      description: "Preview a bounded shell command for explicit approval. Does not execute until confirm_shell is called.",
+      title: "Exec process",
+      description: "Run a short foreground local executable using structured argv and no shell. Prefer this over shell-style command strings. Pipes, redirection, glob expansion, and shell builtins are not supported.",
       inputSchema: {
         workspaceId: z.string(),
-        command: z.string(),
+        command: z.string().describe("Executable name or absolute executable path, e.g. git, node, python, rg."),
+        args: z.array(z.string()).default([]).describe("Argument vector. Do not include shell syntax such as pipes, redirects, or command chaining."),
         workingDirectory: z.string().default("."),
         timeoutSeconds: z.number().int().positive().max(300).default(30),
+        maxBytes: z.number().int().positive().max(config.maxOutputBytes).default(config.maxOutputBytes),
       },
-      annotations: { readOnlyHint: false, destructiveHint: false },
-      outputSchema: z.object({ result: z.string(), action_id: z.string(), requires_approval: z.boolean(), workspaceId: z.string(), workingDirectory: z.string(), command: z.string(), timeoutSeconds: z.number() }),
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+      outputSchema: z.object({ result: z.string(), stdout: z.string(), stderr: z.string(), exitCode: z.number().nullable(), timedOut: z.boolean() }),
     },
-    async ({ workspaceId, command, workingDirectory, timeoutSeconds }) => {
-      assertPreviewShellPayload(command);
+    async ({ workspaceId, command, args, workingDirectory, timeoutSeconds, maxBytes }) => {
+      assertProcessAllowed(command, args, config.accessMode);
       const { absolutePath } = workspaces.resolve(workspaceId, workingDirectory);
-      assertCommandAllowed(command, config.accessMode, "confirmed");
       const dirStat = await stat(absolutePath);
       if (!dirStat.isDirectory()) throw new Error(`workingDirectory is not a directory: ${workingDirectory}`);
-      const pending = shellActions.create({ workspaceId, command, workingDirectory, timeoutSeconds });
-      return textResult(
-        [
-          `Pending shell action: ${pending.id}`,
-          `workspaceId: ${workspaceId}`,
-          `workingDirectory: ${workingDirectory}`,
-          `timeoutSeconds: ${timeoutSeconds}`,
-          "command:",
-          command,
-          "",
-          "This command has not been executed. Call confirm_shell with this actionId to run it.",
-        ].join("\n"),
-        {
-          action_id: pending.id,
-          requires_approval: true,
-          workspaceId,
-          workingDirectory,
-          command,
-          timeoutSeconds,
-        },
-      );
-    },
-  );
-
-  server.registerTool(
-    "confirm_shell",
-    {
-      title: "Confirm shell command",
-      description: "Execute a pending shell command created by preview_shell.",
-      inputSchema: {
-        actionId: z.string(),
-      },
-      annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
-      outputSchema: z.object({ result: z.string(), stdout: z.string(), stderr: z.string(), exitCode: z.number().nullable(), timedOut: z.boolean() }),
-    },
-    async ({ actionId }) => {
-      const pending = shellActions.take(actionId);
-      const { absolutePath } = workspaces.resolve(pending.workspaceId, pending.workingDirectory);
-      assertCommandAllowed(pending.command, config.accessMode, "confirmed");
-      const dirStat = await stat(absolutePath);
-      if (!dirStat.isDirectory()) throw new Error(`workingDirectory is not a directory: ${pending.workingDirectory}`);
-      const result = await runCommand({
-        command: pending.command,
-        cwd: absolutePath,
-        timeoutMs: pending.timeoutSeconds * 1000,
-        maxOutputBytes: config.maxOutputBytes,
-      });
-      return textResult(formatProcessResult(result), result);
-    },
-  );
-
-  server.registerTool(
-    "shell",
-    {
-      title: "Shell",
-      description: "Run a low-risk local command in a workspace. Use preview_shell/confirm_shell for write or publish commands.",
-      inputSchema: {
-        workspaceId: z.string(),
-        command: z.string(),
-        workingDirectory: z.string().default("."),
-        timeoutSeconds: z.number().int().positive().max(300).default(30),
-      },
-      annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
-      outputSchema: z.object({ result: z.string(), stdout: z.string(), stderr: z.string(), exitCode: z.number().nullable(), timedOut: z.boolean() }),
-    },
-    async ({ workspaceId, command, workingDirectory, timeoutSeconds }) => {
-      const { workspace, absolutePath } = workspaces.resolve(workspaceId, workingDirectory);
-      assertCommandAllowed(command, config.accessMode);
-      const dirStat = await stat(absolutePath);
-      if (!dirStat.isDirectory()) throw new Error(`workingDirectory is not a directory: ${workingDirectory}`);
-      const result = await runCommand({
+      const result = await runProcess({
         command,
+        args,
         cwd: absolutePath,
         timeoutMs: timeoutSeconds * 1000,
-        maxOutputBytes: config.maxOutputBytes,
+        maxOutputBytes: Math.min(maxBytes, config.maxOutputBytes),
       });
       return textResult(formatProcessResult(result), result);
     },
+  );
+
+  server.registerTool(
+    "process_start",
+    {
+      title: "Start process",
+      description: "Start a long-running local executable using structured argv and no shell. Use process_read to inspect output and process_stop to stop it.",
+      inputSchema: {
+        workspaceId: z.string(),
+        command: z.string().describe("Executable name or absolute executable path."),
+        args: z.array(z.string()).default([]).describe("Argument vector. Shell syntax is not supported."),
+        workingDirectory: z.string().default("."),
+        timeoutSeconds: z.number().int().positive().max(3600).default(300),
+        maxBytes: z.number().int().positive().max(config.maxOutputBytes).default(config.maxOutputBytes),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+      outputSchema: managedProcessOutputSchema(),
+    },
+    async ({ workspaceId, command, args, workingDirectory, timeoutSeconds, maxBytes }) => {
+      assertProcessAllowed(command, args, config.accessMode);
+      const { absolutePath } = workspaces.resolve(workspaceId, workingDirectory);
+      const dirStat = await stat(absolutePath);
+      if (!dirStat.isDirectory()) throw new Error(`workingDirectory is not a directory: ${workingDirectory}`);
+      const snapshot = managedProcesses.start({
+        command,
+        args,
+        cwd: absolutePath,
+        timeoutMs: timeoutSeconds * 1000,
+        maxOutputBytes: Math.min(maxBytes, config.maxOutputBytes),
+      });
+      return managedProcessResult(snapshot);
+    },
+  );
+
+  server.registerTool(
+    "process_read",
+    {
+      title: "Read process",
+      description: "Read the current stdout/stderr/exit state for a process started by process_start.",
+      inputSchema: {
+        processId: z.string(),
+      },
+      annotations: { readOnlyHint: true },
+      outputSchema: managedProcessOutputSchema(),
+    },
+    async ({ processId }) => managedProcessResult(managedProcesses.read(processId)),
+  );
+
+  server.registerTool(
+    "process_stop",
+    {
+      title: "Stop process",
+      description: "Stop a running process started by process_start.",
+      inputSchema: {
+        processId: z.string(),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: true },
+      outputSchema: managedProcessOutputSchema(),
+    },
+    async ({ processId }) => managedProcessResult(managedProcesses.stop(processId)),
   );
 
   // ============================================================
@@ -804,9 +763,9 @@ function createMcpServer(): McpServer {
 
 // --- Git helper ---
 
-async function gitTool(workspaceId: string, command: string) {
+async function gitTool(workspaceId: string, args: string[]) {
   const workspace = workspaces.get(workspaceId);
-  const result = await runCommand({ command, cwd: workspace.root, timeoutMs: 30_000, maxOutputBytes: config.maxOutputBytes });
+  const result = await runProcess({ command: "git", args, cwd: workspace.root, timeoutMs: 30_000, maxOutputBytes: config.maxOutputBytes });
   return textResult(formatProcessResult(result), result);
 }
 
@@ -884,6 +843,49 @@ function textResult(text: string, structuredContent: object = {}) {
     content: [{ type: "text" as const, text: redactedText }],
     structuredContent: redactedStructuredContent,
   };
+}
+
+function managedProcessOutputSchema() {
+  return z.object({
+    result: z.string(),
+    process_id: z.string(),
+    command: z.string(),
+    args: z.array(z.string()),
+    cwd: z.string(),
+    running: z.boolean(),
+    startedAt: z.number(),
+    finishedAt: z.number().optional(),
+    stdout: z.string(),
+    stderr: z.string(),
+    exitCode: z.number().nullable(),
+    timedOut: z.boolean(),
+  });
+}
+
+function managedProcessResult(snapshot: ManagedProcessSnapshot) {
+  return textResult(
+    [
+      `process_id: ${snapshot.id}`,
+      `running: ${snapshot.running}`,
+      `exit_code: ${snapshot.exitCode}`,
+      `timed_out: ${snapshot.timedOut}`,
+      snapshot.stdout ? `stdout:\n${snapshot.stdout}` : undefined,
+      snapshot.stderr ? `stderr:\n${snapshot.stderr}` : undefined,
+    ].filter(Boolean).join("\n"),
+    {
+      process_id: snapshot.id,
+      command: snapshot.command,
+      args: snapshot.args,
+      cwd: snapshot.cwd,
+      running: snapshot.running,
+      startedAt: snapshot.startedAt,
+      finishedAt: snapshot.finishedAt,
+      stdout: snapshot.stdout,
+      stderr: snapshot.stderr,
+      exitCode: snapshot.exitCode,
+      timedOut: snapshot.timedOut,
+    },
+  );
 }
 
 // --- File reading ---

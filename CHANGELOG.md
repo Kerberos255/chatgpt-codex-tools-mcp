@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.4.5 (2026-07-03)
+
+### Breaking changes
+
+- Removed the exposed shell tools: `shell`, `preview_shell`, and `confirm_shell`.
+
+### Improvements
+
+- Added `exec_process` for short foreground execution using structured `command` + `args[]` with no shell.
+- Added managed background process tools: `process_start`, `process_read`, and `process_stop`.
+- `git_status` now uses the no-shell process runner.
+- `local_status` now reports tool groups so clients can present tools by type.
+- Updated English and Chinese README tool docs to use type-based grouping and document the no-shell process workflow.
+
 ## v0.4.4 (2026-07-01)
 
 ### Fixes

@@ -27,78 +27,87 @@ const blockedPatterns = [
   /\bperl\s+-i\b/i,
 ];
 
-const reviewAllowlist = [
-  /^\s*(git\s+(status|diff|log|show|branch|rev-parse|ls-files)\b|pwd\b|ls\b|dir\b|find\b|rg\b|grep\b|tree\b|node\s+--version\b|npm\s+(test|run\s+[\w:-]+)\b|pnpm\s+(test|run\s+[\w:-]+)\b|yarn\s+(test|run\s+[\w:-]+)\b|pytest\b|python\s+--version\b|python3\s+--version\b)/i,
-];
+const blockedProcessCommands = new Set([
+  "bash",
+  "bash.exe",
+  "cmd",
+  "cmd.exe",
+  "format",
+  "format.com",
+  "powershell",
+  "powershell.exe",
+  "pwsh",
+  "pwsh.exe",
+  "reboot",
+  "reboot.exe",
+  "reg",
+  "reg.exe",
+  "sc",
+  "sc.exe",
+  "sh",
+  "sh.exe",
+  "shutdown",
+  "shutdown.exe",
+]);
 
-const confirmedShellAllowlist = [
-  /^\s*git\s+init\b/i,
-  /^\s*git\s+add\b/i,
-  /^\s*git\s+commit\b/i,
-  /^\s*git\s+branch\s+-M\b/i,
-  /^\s*git\s+remote\s+(add|set-url|remove|-v)\b/i,
-  /^\s*git\s+tag\b/i,
-  /^\s*git\s+push\b/i,
-  /^\s*gh\s+repo\s+(create|view)\b/i,
-];
+const gitReadSubcommands = new Set([
+  "status",
+  "diff",
+  "log",
+  "show",
+  "branch",
+  "rev-parse",
+  "ls-files",
+  "--version",
+]);
 
-export type ShellApprovalMode = "direct" | "confirmed";
+const packageManagerRunSubcommands = new Set(["test", "run"]);
 
-export function assertCommandAllowed(command: string, accessMode: AccessMode, approvalMode: ShellApprovalMode = "direct"): void {
+export function assertProcessAllowed(command: string, args: string[], accessMode: AccessMode): void {
   const trimmed = command.trim();
-  if (!trimmed) throw new Error("Empty shell command.");
+  if (!trimmed) throw new Error("Empty process command.");
 
+  const executable = trimmed.split(/[\\/]/).pop()?.toLowerCase() ?? trimmed.toLowerCase();
+  if (blockedProcessCommands.has(executable)) {
+    throw new Error("Process command launches a shell or blocked system tool. Use structured tools instead.");
+  }
+
+  const joined = [trimmed, ...args].join(" ");
   for (const pattern of blockedPatterns) {
-    if (pattern.test(trimmed)) throw new Error("Shell command matches a blocked policy pattern.");
+    if (pattern.test(joined)) throw new Error("Process arguments match a blocked policy pattern.");
   }
 
   if (accessMode !== "review") return;
+  if (isReviewProcessAllowed(executable, args)) return;
 
-  if (reviewAllowlist.some((pattern) => pattern.test(trimmed))) return;
-
-  if (approvalMode === "confirmed" && confirmedShellAllowlist.some((pattern) => pattern.test(trimmed))) return;
-
-  throw new Error(
-    approvalMode === "confirmed"
-      ? "Shell command is not in the review-mode direct or confirmed allowlist."
-      : "Shell command is not in the review-mode allowlist. Use shell preview/confirm for approved write/publish commands.",
-  );
+  throw new Error("Process command is not in the review-mode allowlist.");
 }
 
-export async function runCommand(input: {
-  command: string;
-  cwd: string;
-  timeoutMs: number;
-  maxOutputBytes: number;
-}): Promise<ProcessResult> {
-  return new Promise((resolve) => {
-    const child = spawn(input.command, {
-      cwd: input.cwd,
-      shell: true,
-      windowsHide: true,
-      env: scrubEnv(process.env),
-    });
+function isReviewProcessAllowed(executable: string, args: string[]): boolean {
+  const firstArg = args[0]?.toLowerCase();
 
-    let stdout = "";
-    let stderr = "";
-    let timedOut = false;
+  if (executable === "git" || executable === "git.exe") {
+    return firstArg ? gitReadSubcommands.has(firstArg) : false;
+  }
 
-    const timer = setTimeout(() => {
-      timedOut = true;
-      child.kill("SIGTERM");
-    }, input.timeoutMs);
+  if (["npm", "npm.cmd", "pnpm", "pnpm.cmd", "yarn", "yarn.cmd"].includes(executable)) {
+    return firstArg ? packageManagerRunSubcommands.has(firstArg) : false;
+  }
 
-    child.stdout?.on("data", (chunk: Buffer) => {
-      stdout = appendCapped(stdout, chunk.toString("utf8"), input.maxOutputBytes);
-    });
-    child.stderr?.on("data", (chunk: Buffer) => {
-      stderr = appendCapped(stderr, chunk.toString("utf8"), input.maxOutputBytes);
-    });
-    child.on("close", (exitCode) => {
-      clearTimeout(timer);
-      resolve({ stdout, stderr, exitCode, timedOut });
-    });
-  });
+  if (["node", "node.exe", "python", "python.exe", "python3", "python3.exe", "py", "py.exe"].includes(executable)) {
+    return args.length === 1 && ["--version", "-v", "-V"].includes(args[0]);
+  }
+
+  return [
+    "pytest",
+    "pytest.exe",
+    "rg",
+    "rg.exe",
+    "grep",
+    "grep.exe",
+    "where",
+    "where.exe",
+  ].includes(executable);
 }
 
 export async function runProcess(input: {
@@ -160,7 +169,7 @@ function appendCapped(current: string, next: string, maxBytes: number): string {
   return combined.slice(0, maxBytes) + "\n[output truncated]\n";
 }
 
-function scrubEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+export function scrubEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const clean: NodeJS.ProcessEnv = {};
   for (const [key, value] of Object.entries(env)) {
     if (/token|secret|password|api[_-]?key/i.test(key)) continue;

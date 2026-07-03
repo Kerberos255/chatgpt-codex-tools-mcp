@@ -4,7 +4,7 @@ English | [中文](./README.zh.md)
 
 通过 MCP 向 ChatGPT 暴露 Codex 风格的本地工作区工具。
 
-ChatGPT 负责推理。此服务仅提供受限制的本地工具：打开工作区、列出/读取/搜索/树状浏览文件、查看 Git 状态、预览-确认文件编辑、运行一小部分白名单命令，以及可选的基于结构化预览-确认流程的 SQLite 查询与修改。
+ChatGPT 负责推理。此服务仅提供受限制的本地工具：打开工作区、列出/读取/搜索/树状浏览文件、查看 Git 状态、预览-确认文件编辑、以无 Shell 的结构化方式运行本地进程，以及可选的基于结构化预览-确认流程的 SQLite 查询与修改。
 
 > 不与 OpenAI 或 Codex 关联。这是一个社区/本地工具层，以小型 Codex 风格工具箱的形式为 ChatGPT 提供服务。
 
@@ -37,7 +37,7 @@ ChatGPT 自定义连接器
 - 读/列出/搜索/查找/树状浏览等检查工具
 - 9 种编辑类型、支持多文件批处理的预览-确认文件编辑流程
 - Git 状态/差异查看工具
-- `review` 模式下的 Shell 白名单，仅允许低风险的验证命令
+- 结构化前台/后台进程工具（`exec_process`、`process_start`、`process_read`、`process_stop`），使用 argv 数组，不支持 Shell 语法
 - 工具输出中的智能值脱敏（尽力而为）
 - 提供 Windows 辅助脚本，可复用 Codex 自带 Node 运行时
 - 可选 Web 工具（默认禁用）：SearXNG 搜索和公共 HTTP 抓取
@@ -47,30 +47,31 @@ ChatGPT 自定义连接器
 
 ## 向 ChatGPT 暴露的工具
 
-| 工具 | 用途 |
-| --- | --- |
-| `local_status` | 服务状态、访问模式、允许根路径、能力与功能标志。 |
-| `open_workspace` | 在 `CTM_ALLOWED_ROOTS` 下打开一个本地项目目录，获取可复用的 workspaceId。 |
-| `list_dir` | 列出打开的工作区中的文件。 |
-| `read_file` | 读取 UTF-8 文本文件，带输出大小限制。 |
-| `search_files` | 在工作区内全文搜索。可用时优先使用 `rg`。支持大小写、上下文行数、最大匹配数和包含/排除 glob 模式。 |
-| `find_files` | 通过 glob 模式查找文件（如 `*.ts`、`**/config*`）。 |
-| `project_tree` | 展示可视化的目录树（限制深度，跳过 node_modules/dist/.git）。 |
-| `git_status` | 运行 `git status --short`。 |
-| `git_diff` | 查看未暂存或已暂存的 Git diff，可只看统计或限定到某个路径。 |
-| `preview_edit` | **（推荐）** 创建待处理的多文件编辑批次。支持 replace_text、replace_range、insert_before、insert_after、append、create、overwrite、rename、delete。 |
-| `confirm_edit` | 按 actionId 应用待处理的编辑批次。 |
-| `preview_shell` | 将 Shell 命令加入审批队列。 |
-| `confirm_shell` | 执行已加入队列的 Shell 命令。 |
-| `shell` | 直接运行本地命令，受 `CTM_ACCESS_MODE` 限制。 |
-| `sqlite_status` | 显示 SQLite 工具配置。始终可用。 |
-| `sqlite_schema` * | 查看白名单数据库的表结构。 |
-| `sqlite_select` * | 运行一条只读 `SELECT`/`WITH` 或安全的 `PRAGMA`。 |
-| `sqlite_preview_change` * | 预览对白名单数据库的结构化 insert/update/delete。支持通过点分路径键（如 `job_json.enabled`）进行 jsonSet。在确认前不会实际写入。 |
-| `sqlite_confirm_change` * | 按 actionId 应用待处理的 SQLite 更改。在写入前会重新验证 'expected' 字段。 |
-| `web_status` | 显示 Web 工具配置。始终可用。 |
-| `web_search` * | 通过 SearXNG 搜索网络。 |
-| `web_fetch` * | 获取公共 HTTP(S) 页面。阻止 localhost、私有网络和凭据信息。 |
+| 类型 | 工具 | 用途 |
+| --- | --- | --- |
+| Meta | `local_status` | 服务状态、访问模式、允许根路径、能力、功能标志和工具分组。 |
+| Workspace | `open_workspace` | 在 `CTM_ALLOWED_ROOTS` 下打开一个本地项目目录，获取可复用的 workspaceId。 |
+| Read | `list_dir` | 列出打开的工作区中的文件。 |
+| Read | `read_file` | 读取 UTF-8 文本文件，带输出大小限制。 |
+| Read | `search_files` | 在工作区内全文搜索。可用时优先使用 `rg`。支持大小写、上下文行数、最大匹配数和包含/排除 glob 模式。 |
+| Read | `find_files` | 通过 glob 模式查找文件（如 `*.ts`、`**/config*`）。 |
+| Read | `project_tree` | 展示可视化的目录树（限制深度，跳过 node_modules/dist/.git）。 |
+| Git | `git_status` | 通过结构化进程 runner 运行 `git status --short`。 |
+| Git | `git_diff` | 查看未暂存或已暂存的 Git diff，可只看统计或限定到某个路径。 |
+| Edit/write | `preview_edit` | **（推荐）** 创建待处理的多文件编辑批次。支持 replace_text、replace_range、insert_before、insert_after、append、create、overwrite、rename、delete。 |
+| Edit/write | `confirm_edit` | 按 actionId 应用待处理的编辑批次。 |
+| Exec | `exec_process` | 用 `command` + `args[]` 运行短前台进程，无 Shell。 |
+| Process | `process_start` | 用 `command` + `args[]` 启动长运行进程，无 Shell。 |
+| Process | `process_read` | 读取托管进程的 stdout/stderr/退出状态。 |
+| Process | `process_stop` | 停止托管进程。 |
+| SQLite | `sqlite_status` | 显示 SQLite 工具配置。始终可用。 |
+| SQLite | `sqlite_schema` * | 查看白名单数据库的表结构。 |
+| SQLite | `sqlite_select` * | 运行一条只读 `SELECT`/`WITH` 或安全的 `PRAGMA`。 |
+| SQLite | `sqlite_preview_change` * | 预览对白名单数据库的结构化 insert/update/delete。支持通过点分路径键（如 `job_json.enabled`）进行 jsonSet。在确认前不会实际写入。 |
+| SQLite | `sqlite_confirm_change` * | 按 actionId 应用待处理的 SQLite 更改。在写入前会重新验证 'expected' 字段。 |
+| Web | `web_status` | 显示 Web 工具配置。始终可用。 |
+| Web | `web_search` * | 通过 SearXNG 搜索网络。 |
+| Web | `web_fetch` * | 获取公共 HTTP(S) 页面。阻止 localhost、私有网络和凭据信息。 |
 
 \* *可选工具，默认禁用，仅在启用相应功能标志后可用。*
 
@@ -95,11 +96,11 @@ CTM_ACCESS_MODE=review
 - 请通过私有隧道使用，而非公网 URL。
 - 在 ChatGPT 连接器配置中选择 **No Authentication / 未授权**。
 - 输出脱敏只是安全网，不能替代窄化 `CTM_ALLOWED_ROOTS`、deny 规则和 SQLite 白名单配置。
-- 大型参数会被拒绝；请拆成更小的 preview 调用。
+- 大型编辑和 SQLite 修改参数会被拒绝；请拆成更小的 preview 调用。
 
-`review` 模式会阻止危险命令模式，仅允许一小部分检查/测试命令，如 `git status`、`git diff`、`dir`、`ls`、`node --version` 和 `npm run ...`。
+不再暴露 Shell 工具。优先使用专用工具（`read_file`、`search_files`、`git_status`、`git_diff`、`preview_edit`、SQLite 工具）。确实需要运行命令时，使用 `exec_process` 或 `process_start`，传入 `command` 和 `args[]` 数组。管道、重定向、glob 展开、命令串联、Shell 内置命令都不支持。
 
-修改 Git 历史或发布到远程的命令（如 `git add`、`git commit`、`git remote`、`git push` 和 `gh repo create`）在 `review` 模式下不允许通过直接 shell 执行。它们必须通过 `preview_shell` 暂存，然后使用返回的 actionId 通过 `confirm_shell` 执行。
+`review` 模式会阻止危险进程模式，仅允许一小部分检查/测试可执行程序，如 `git status`、`git diff`、`rg`、`pytest`、Node/Python 版本检查和包管理器的 `test`/`run` 命令。`full` 模式仍会阻止直接启动 `cmd`、`powershell`、`pwsh`、`sh`、`bash` 等 Shell 可执行程序。
 
 ---
 
@@ -268,7 +269,7 @@ start-tunnel.cmd    # 仅启动私有隧道（初始化后）
 | `mcp.accessMode` | `CTM_ACCESS_MODE` | `review` | `review` 或 `full`。 |
 | `mcp.denyGlobs` | `CTM_DENY_GLOBS` | 内置拒绝列表 | 额外拒绝规则，支持数组或逗号分隔字符串。 |
 | `mcp.maxReadBytes` | `CTM_MAX_READ_BYTES` | `200000` | 文件读取返回的最大字节数。 |
-| `mcp.maxOutputBytes` | `CTM_MAX_OUTPUT_BYTES` | `200000` | Shell/Git 输出返回的最大字节数。 |
+| `mcp.maxOutputBytes` | `CTM_MAX_OUTPUT_BYTES` | `200000` | 进程/Git 输出返回的最大字节数。 |
 | `runtime.codexRuntimeRoot` | `CTM_CODEX_RUNTIME_ROOT` | Codex 捆绑运行时目录 | 高级选项，用于覆盖 Codex Node 运行时搜索根目录。 |
 | `runtime.fallbackNodeBin` | `OPENCLAW_NODE_BIN` | 无 | 可选，包含 `node.exe` 的目录。 |
 | `runtime.npmCache` | `CTM_NPM_CACHE` | 无 | 可选 npm 缓存目录。 |
@@ -376,9 +377,9 @@ confirm_edit  →  应用批次中的所有修改
 
 将该项目的父目录添加到 `CTM_ALLOWED_ROOTS`，然后重启 MCP 服务。
 
-### Shell 命令被阻止
+### 进程命令被阻止
 
-你当前处于 `review` 模式。请尽可能使用 read/search/git/edit 工具。仅在受信任的本地环境中切换为 `full` 模式。
+请尽可能使用 read/search/git/edit/SQLite 工具。需要执行命令时，将真实可执行程序和 `args[]` 传给 `exec_process` 或 `process_start`；Shell 语法和 Shell 可执行程序会被刻意禁用。
 
 ### SQLite 工具不可用
 
