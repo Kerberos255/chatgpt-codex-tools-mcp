@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.4.6 (2026-07-03)
+
+### Improvements
+
+- Clarified `preview_edit` input schema with type-specific required fields for each edit operation.
+- Clarified `sqlite_preview_change` input schema with a discriminated insert/update/delete shape.
+
 ## v0.4.5 (2026-07-03)
 
 ### Breaking changes

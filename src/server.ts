@@ -23,7 +23,7 @@ import {
 import { webFetch, webSearch, webStatus } from "./web.js";
 import { WorkspaceRegistry } from "./workspaces.js";
 
-const SERVER_VERSION = "0.4.5";
+const SERVER_VERSION = "0.4.6";
 
 const TOOL_GROUPS = [
   { type: "meta", tools: ["local_status"] },
@@ -48,6 +48,88 @@ const payloadLimits = {
   previewEditMaxTotalTextBytes: 120_000,
   sqliteChangeMaxPayloadBytes: 32_000,
 };
+
+const editChangeSchema = z.discriminatedUnion("type", [
+  z.object({
+    type: z.literal("replace_text"),
+    path: z.string().describe("File path relative to workspace root."),
+    oldText: z.string().describe("Exact text to find and replace. Use create for new files."),
+    newText: z.string().describe("Replacement text."),
+  }),
+  z.object({
+    type: z.literal("replace_range"),
+    path: z.string().describe("File path relative to workspace root."),
+    startLine: z.number().int().min(1).describe("1-indexed start line."),
+    endLine: z.number().int().min(1).describe("1-indexed end line, inclusive."),
+    newText: z.string().describe("Replacement text for the line range."),
+  }),
+  z.object({
+    type: z.literal("insert_before"),
+    path: z.string().describe("File path relative to workspace root."),
+    anchor: z.string().describe("Anchor text to insert before. Uses the first occurrence."),
+    text: z.string().describe("Text to insert."),
+  }),
+  z.object({
+    type: z.literal("insert_after"),
+    path: z.string().describe("File path relative to workspace root."),
+    anchorAfter: z.string().describe("Anchor text to insert after. Uses the first occurrence."),
+    text: z.string().describe("Text to insert."),
+  }),
+  z.object({
+    type: z.literal("append"),
+    path: z.string().describe("File path relative to workspace root."),
+    text: z.string().describe("Text to append to the end of the file."),
+  }),
+  z.object({
+    type: z.literal("create"),
+    path: z.string().describe("File path relative to workspace root. The file must not already exist."),
+    text: z.string().describe("Full file content."),
+  }),
+  z.object({
+    type: z.literal("overwrite"),
+    path: z.string().describe("File path relative to workspace root."),
+    newText: z.string().describe("New full file content."),
+  }),
+  z.object({
+    type: z.literal("rename"),
+    path: z.string().describe("Current file path relative to workspace root."),
+    newPath: z.string().describe("Target path relative to workspace root."),
+  }),
+  z.object({
+    type: z.literal("delete"),
+    path: z.string().describe("File path relative to workspace root."),
+  }),
+]);
+
+const sqliteValueSchema = z.union([z.string(), z.number(), z.null()]);
+const sqliteWhereConditionSchema = z.object({
+  column: z.string().describe("Column name."),
+  operator: z.enum(["=", "!=", ">", "<", ">=", "<=", "LIKE", "IS", "IS NOT"]),
+  value: sqliteValueSchema,
+});
+const sqliteChangeSchema = z.discriminatedUnion("type", [
+  z.object({
+    type: z.literal("insert"),
+    table: z.string().describe("Table name."),
+    columns: z.array(z.string()).min(1).describe("Column names."),
+    values: z.array(sqliteValueSchema).min(1).describe("Values matching columns order."),
+  }),
+  z.object({
+    type: z.literal("update"),
+    table: z.string().describe("Table name."),
+    set: z.record(z.string(), sqliteValueSchema).describe("Column=value pairs. Use dot-path keys for jsonSet on text columns, e.g. job_json.enabled."),
+    where: z.array(sqliteWhereConditionSchema).optional().describe("AND-joined WHERE conditions."),
+    limit: z.number().int().min(1).max(100).optional().describe("Row limit. Defaults to 1. Avoid unbounded updates."),
+    expected: z.record(z.string(), z.unknown()).optional().describe("Re-verify these field values on confirm. Prevents stale-preview writes."),
+  }),
+  z.object({
+    type: z.literal("delete"),
+    table: z.string().describe("Table name."),
+    where: z.array(sqliteWhereConditionSchema).optional().describe("AND-joined WHERE conditions."),
+    limit: z.number().int().min(1).max(100).optional().describe("Row limit. Defaults to 1. You must specify a limit or WHERE for deletes."),
+    expected: z.record(z.string(), z.unknown()).optional().describe("Re-verify these field values on confirm."),
+  }),
+]);
 
 function byteLength(value: string): number {
   return Buffer.byteLength(value, "utf8");
@@ -386,26 +468,7 @@ function createMcpServer(): McpServer {
       description: "Preview one or more bounded file edits. Does not write. Use confirm_edit with the returned action_id after review.",
       inputSchema: {
         workspaceId: z.string(),
-        changes: z.array(
-          z.object({
-            path: z.string().describe("File path relative to workspace root."),
-            type: z.enum(["replace_text", "replace_range", "insert_before", "insert_after", "append", "create", "overwrite", "rename", "delete"]),
-            // replace_text
-            oldText: z.string().optional().describe("Exact text to find and replace. Empty string creates a new file (backward compat)."),
-            newText: z.string().optional().describe("Replacement text for replace_text/overwrite/replace_range."),
-            // replace_range
-            startLine: z.number().int().min(1).optional().describe("1-indexed start line for replace_range."),
-            endLine: z.number().int().min(1).optional().describe("1-indexed end line (inclusive) for replace_range."),
-            // insert_before / insert_after / append / create
-            text: z.string().optional().describe("Text to insert (create, append, insert_before, insert_after)."),
-            // insert_before
-            anchor: z.string().optional().describe("Anchor text to insert before (first occurrence)."),
-            // insert_after
-            anchorAfter: z.string().optional().describe("Anchor text to insert after (first occurrence)."),
-            // rename
-            newPath: z.string().optional().describe("Target path for rename."),
-          }),
-        ).min(1).describe("One or more file changes in this batch."),
+        changes: z.array(editChangeSchema).min(1).describe("One or more file changes in this batch. Each item uses its type field to determine the required fields."),
       },
       annotations: { readOnlyHint: false, destructiveHint: false },
       outputSchema: z.object({
@@ -616,40 +679,7 @@ function createMcpServer(): McpServer {
         description: "Preview a bounded structured SQLite insert/update/delete on an allowed DB. Does not write. Use sqlite_confirm_change after review.",
         inputSchema: {
           dbPath: z.string().optional().describe("Absolute path to an allowed SQLite database."),
-          change: z.union([
-            // insert
-            z.object({
-              type: z.literal("insert"),
-              table: z.string().describe("Table name."),
-              columns: z.array(z.string()).min(1).describe("Column names."),
-              values: z.array(z.union([z.string(), z.number(), z.null()])).min(1).describe("Values matching columns order."),
-            }),
-            // update
-            z.object({
-              type: z.literal("update"),
-              table: z.string().describe("Table name."),
-              set: z.record(z.string(), z.union([z.string(), z.number(), z.null()])).describe("Column=value pairs. Use dot-path keys for jsonSet on text columns (e.g. job_json.enabled)."),
-              where: z.array(z.object({
-                column: z.string(),
-                operator: z.enum(["=", "!=", ">", "<", ">=", "<=", "LIKE", "IS", "IS NOT"]),
-                value: z.union([z.string(), z.number(), z.null()]),
-              })).optional().describe("AND-joined WHERE conditions."),
-              limit: z.number().int().min(1).max(100).optional().describe("Row limit (default 1). Avoid unbounded updates."),
-              expected: z.record(z.string(), z.unknown()).optional().describe("Re-verify these field values on confirm. Prevents stale-preview writes."),
-            }),
-            // delete
-            z.object({
-              type: z.literal("delete"),
-              table: z.string().describe("Table name."),
-              where: z.array(z.object({
-                column: z.string(),
-                operator: z.enum(["=", "!=", ">", "<", ">=", "<=", "LIKE", "IS", "IS NOT"]),
-                value: z.union([z.string(), z.number(), z.null()]),
-              })).optional().describe("AND-joined WHERE conditions."),
-              limit: z.number().int().min(1).max(100).optional().describe("Row limit (default 1). You must specify a limit or WHERE for deletes."),
-              expected: z.record(z.string(), z.unknown()).optional().describe("Re-verify these field values on confirm."),
-            }),
-          ]),
+          change: sqliteChangeSchema.describe("SQLite change object. The type field selects insert, update, or delete and determines the required fields."),
         },
         annotations: { readOnlyHint: false, destructiveHint: false },
         outputSchema: z.object({
