@@ -1238,7 +1238,45 @@ app.use(express.json({ limit: "4mb" }));
 app.use(express.urlencoded({ extended: false }));
 app.get("/healthz", (_req, res) => res.json({ ok: true, name: "chatgpt-codex-tools-mcp" }));
 
-const transports = new Map<string, StreamableHTTPServerTransport>();
+// Session TTL to prevent memory leak from stale MCP sessions (30 min inactivity)
+const SESSION_TTL_MS = 30 * 60 * 1000;
+const sessionMeta = new Map<string, { transport: StreamableHTTPServerTransport; lastUsed: number }>();
+const transports = {
+  get(sessionId: string): StreamableHTTPServerTransport | undefined {
+    const entry = sessionMeta.get(sessionId);
+    if (!entry) return undefined;
+    if (Date.now() - entry.lastUsed > SESSION_TTL_MS) {
+      sessionMeta.delete(sessionId);
+      try { entry.transport.close(); } catch { /* ignore */ }
+      return undefined;
+    }
+    entry.lastUsed = Date.now();
+    return entry.transport;
+  },
+  set(sessionId: string, transport: StreamableHTTPServerTransport): void {
+    sessionMeta.set(sessionId, { transport, lastUsed: Date.now() });
+  },
+  delete(sessionId: string): void {
+    sessionMeta.delete(sessionId);
+  },
+};
+
+// Periodic cleanup of stale sessions (every 5 min)
+const CLEANUP_INTERVAL_MS = 5 * 60 * 1000;
+setInterval(() => {
+  const now = Date.now();
+  let expired = 0;
+  for (const [id, entry] of sessionMeta) {
+    if (now - entry.lastUsed > SESSION_TTL_MS) {
+      try { entry.transport.close(); } catch { /* ignore */ }
+      sessionMeta.delete(id);
+      expired++;
+    }
+  }
+  if (expired > 0) {
+    console.log(`MCP session cleanup: removed ${expired} stale session(s), ${sessionMeta.size} remaining`);
+  }
+}, CLEANUP_INTERVAL_MS);
 
 app.all("/mcp", async (req, res) => {
   const sessionId = req.header("mcp-session-id");
