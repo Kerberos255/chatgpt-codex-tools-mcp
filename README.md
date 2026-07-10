@@ -1,171 +1,60 @@
-[中文](./README.zh.md) | English
+[简体中文](./README.zh.md) | English
 
 # chatgpt-codex-tools-mcp
 
-Codex-style local workspace tools exposed to ChatGPT through MCP.
+A local MCP server that gives ChatGPT a constrained, Codex-style toolbox for
+working with your own projects.
 
-ChatGPT does the reasoning. This server only provides constrained local tools: open a workspace, list/read/search/tree files, inspect git state, preview-then-confirm file edits, run structured local processes without exposing a shell, and optionally query/change SQLite databases with a structured preview-then-confirm workflow.
+ChatGPT does the reasoning. This server provides workspace-scoped file reading,
+search, Git inspection, preview-before-confirm edits, structured process
+execution without a shell, and optional web and SQLite tools.
 
-> Not affiliated with OpenAI or Codex. This is a community/local tool layer that behaves like a small Codex-style toolbox for ChatGPT.
+> Community project; not affiliated with OpenAI or Codex.
+>
+> The MCP endpoint has no application-layer authentication. Keep it bound to
+> `127.0.0.1` and connect through a private MCP tunnel. Do not expose it directly
+> to the public internet.
 
----
+## Highlights
 
-## What this is
-
-`chatgpt-codex-tools-mcp` is a local HTTP MCP server for people who want ChatGPT to inspect and edit local projects without giving it a broad shell or public network endpoint.
-
-Recommended flow:
-
-```text
-ChatGPT custom connector
-  -> private MCP tunnel
-  -> tunnel client on your machine
-  -> http://127.0.0.1:3333/mcp
-  -> this local MCP server
-  -> allowed local workspaces only
-```
-
-The default public template uses **No Authentication** at the MCP app layer. This is intentional for private/local tunnel usage, but it also means you should not expose this server directly to the public internet.
-
----
-
-## Features
-
-- Local-only HTTP server, bound to `127.0.0.1` by default.
-- Workspace boundary via `CTM_ALLOWED_ROOTS`.
-- Deny rules for common private files and sensitive paths.
-- Read/list/search/find/tree tools for inspection.
-- Preview-then-confirm file editing with 9 edit types and multi-file batches.
-- Git status/diff tools for review.
-- Structured foreground/background process tools (`exec_process`, `process_start`, `process_read`, `process_stop`) with argv arrays and no shell syntax.
-- Best-effort secret redaction on tool output.
-- Windows-friendly helper script that can reuse Codex's bundled Node runtime if present.
-- Optional web tools (disabled by default): SearXNG search and public HTTP fetch.
-- Optional SQLite tools (disabled by default): allowlisted read-only queries + structured preview-then-confirm updates with jsonSet support.
-
----
-
-## Tools exposed to ChatGPT
-
-| Type | Tool | Purpose |
-| --- | --- | --- |
-| Meta | `local_status` | Server status, access mode, allowed roots, caps, feature flags, and tool groups. |
-| Workspace | `open_workspace` | Open a local project folder under `CTM_ALLOWED_ROOTS` and get a reusable workspaceId. |
-| Read | `list_dir` | List files in an open workspace. |
-| Read | `read_file` | Read a UTF-8 text file with output caps. |
-| Read | `search_files` | Full-text search in a workspace. Uses `rg` when available. Supports caseSensitive, contextLines, maxMatches, include/exclude globs. |
-| Read | `find_files` | Find files by glob pattern (e.g. `*.ts`, `**/config*`). |
-| Read | `project_tree` | Show a visual directory tree (depth-limited, skips node_modules/dist/.git). |
-| Git | `git_status` | Run `git status --short` through the structured process runner. |
-| Git | `git_diff` | Review unstaged or staged git diffs, optionally stat-only or scoped to a path. |
-| Edit/write | `preview_edit` | **(recommended)** Create a pending multi-file edit batch. Supports replace_text, replace_range, insert_before, insert_after, append, create, overwrite, rename, delete. |
-| Edit/write | `confirm_edit` | Apply a pending edit batch by action id. |
-| Exec | `exec_process` | Run a short foreground executable with `command` + `args[]`, no shell. |
-| Process | `process_start` | Start a long-running executable with `command` + `args[]`, no shell. |
-| Process | `process_read` | Read stdout/stderr/exit state for a managed process. |
-| Process | `process_stop` | Stop a managed process. |
-| SQLite | `sqlite_status` | Show SQLite tools configuration. Always available. |
-| SQLite | `sqlite_schema` * | Inspect schema for an allowlisted database. |
-| SQLite | `sqlite_select` * | Run one read-only `SELECT`/`WITH` or safe `PRAGMA`. |
-| SQLite | `sqlite_preview_change` * | Preview a structured insert/update/delete on an allowed database. Supports jsonSet via dot-path keys (e.g. `job_json.enabled`). Does not write until confirmed. |
-| SQLite | `sqlite_confirm_change` * | Apply a pending SQLite change by action id. Re-verifies 'expected' fields before writing. |
-| Web | `web_status` | Show web tools configuration. Always available. |
-| Web | `web_search` * | Search the web via SearXNG. |
-| Web | `web_fetch` * | Fetch a public HTTP(S) page. Blocks localhost, private networks, and credentials. |
-
-\* _Optional tools, disabled by default unless their matching feature flag is enabled._
-
----
-
-## Security model
-
-Default settings are intentionally conservative:
-
-```text
-HOST=127.0.0.1
-PORT=3333
-CTM_ACCESS_MODE=review
-```
-
-Important rules:
-
-- Keep `HOST=127.0.0.1` for personal use.
-- Keep `CTM_ACCESS_MODE=review` unless you fully understand the risk.
-- Set `CTM_ALLOWED_ROOTS` narrowly, for example `D:\Projects` or `/Users/me/projects`.
-- Do not set allowed roots to a whole system drive.
-- Use this behind a private tunnel rather than a public URL.
-- In ChatGPT connector setup, choose **No Authentication** / **未授权**.
-- Treat output redaction as a safety net, not a replacement for narrow `CTM_ALLOWED_ROOTS`, deny rules, and SQLite allowlists.
-- Large edit and SQLite change payloads are rejected; split them into smaller preview calls.
-
-No shell tool is exposed. Use specialized tools first (`read_file`, `search_files`, `git_status`, `git_diff`, `preview_edit`, SQLite tools). For commands that truly need a process, use `exec_process` or `process_start` with a `command` and `args[]` array. Shell syntax such as pipes, redirects, glob expansion, command chaining, and shell builtins is not supported.
-
-`review` mode blocks dangerous process patterns and only allows a small set of inspection/test executables such as `git status`, `git diff`, `rg`, `pytest`, version checks for Node/Python, and package-manager `test`/`run` commands. `full` mode still blocks direct shell executables such as `cmd`, `powershell`, `pwsh`, `sh`, and `bash`.
-
----
+- Local HTTP MCP endpoint: `http://127.0.0.1:3333/mcp`
+- Workspace boundary through `CTM_ALLOWED_ROOTS`
+- Built-in deny rules for common private files and sensitive paths
+- Preview-then-confirm file and SQLite writes
+- Structured `command` + `args[]` execution; no shell syntax or shell tool
+- Foreground and managed background processes with time/output limits
+- Best-effort secret redaction on tool output
+- Optional SearXNG search and public HTTP fetch, disabled by default
+- Optional allowlisted SQLite reads and bounded structured writes, disabled by default
+- Windows initializer and launchers for the MCP server and private tunnel
 
 ## Requirements
 
-- Node.js 20+ recommended.
-- npm.
-- A ChatGPT custom connector that can connect to an MCP server.
-- OpenAI `tunnel-client` if ChatGPT needs to reach this local server through Secure MCP Tunnel.
-- A tunnel id and a runtime key for `tunnel-client`, created in OpenAI Platform tunnel settings.
-- Optional SQLite tools require a Node.js runtime with `node:sqlite` support; Node.js 24+ is recommended for those tools.
+- Node.js 20 or newer for the core server; Node.js 24 is recommended
+- npm
+- A ChatGPT custom connector with Secure MCP Tunnel support
+- OpenAI `tunnel-client` when ChatGPT must reach this local endpoint
+- SQLite tools require a runtime with `node:sqlite` support (Node.js 22.5+;
+  Node.js 24+ recommended)
 
-On Windows, the helper script checks Node in this order:
+On Windows, `scripts/start-mcp.ps1` looks for Node in this order:
 
-1. Codex bundled Node runtime under `%LOCALAPPDATA%\OpenAI\Codex\runtimes\cua_node`.
-2. `OPENCLAW_NODE_BIN`, if you set it.
-3. `node` on `PATH`.
-
----
-
-## Install
-
-```bash
-git clone https://github.com/Kerberos255/chatgpt-codex-tools-mcp.git
-cd chatgpt-codex-tools-mcp
-npm install
-npm run build
-```
-
-Set your allowed workspace root before starting:
-
-### Windows PowerShell
-
-```powershell
-$env:CTM_ALLOWED_ROOTS = "D:\Projects"
-$env:CTM_ACCESS_MODE = "review"
-npm run build
-node dist/server.js
-```
-
-### macOS / Linux
-
-```bash
-export CTM_ALLOWED_ROOTS="$HOME/projects"
-export CTM_ACCESS_MODE="review"
-npm run build
-node dist/server.js
-```
-
-The server should print something like:
-
-```text
-chatgpt-codex-tools-mcp listening on http://127.0.0.1:3333/mcp
-allowed roots: D:\Projects
-access mode: review
-auth: no authentication (use only behind a private/local tunnel)
-```
-
----
+1. Codex bundled runtime under `%LOCALAPPDATA%\OpenAI\Codex\runtimes\cua_node`
+2. `OPENCLAW_NODE_BIN`
+3. `node` on `PATH`
 
 ## Windows quick start
 
-For regular Windows users, use the root `.cmd` files. The PowerShell scripts under `scripts/` are implementation details and advanced entry points.
+### 1. Get the project
 
-### 1. Initialize once
+Download the ZIP attached to the latest GitHub Release and extract it, or clone:
+
+```powershell
+git clone https://github.com/Kerberos255/chatgpt-codex-tools-mcp.git
+cd chatgpt-codex-tools-mcp
+```
+
+### 2. Initialize once
 
 Run:
 
@@ -173,15 +62,15 @@ Run:
 init-windows.cmd
 ```
 
-The initializer asks for or configures:
+The initializer:
 
-1. Allowed workspace roots, for example `D:\Projects`.
-2. npm dependencies and `dist/server.js` build output.
-3. The local `tunnel-client.exe` path.
-4. `config.json` for local MCP launcher settings.
-5. Local-only tunnel startup files for this machine.
+- asks for narrow allowed workspace roots, such as `D:\Projects`
+- installs npm dependencies and builds `dist/server.js`
+- locates your local `tunnel-client.exe`
+- creates an ignored local `config.json`
+- creates local-only MCP and tunnel launchers
 
-It creates or updates these local files:
+Generated local files include:
 
 ```text
 config.json
@@ -190,39 +79,138 @@ start-tunnel.local.cmd
 start-tunnel.local.ps1
 ```
 
-The initializer does **not** save your runtime key. When the tunnel starts, it uses `CONTROL_PLANE_API_KEY` from the current environment if present; otherwise it asks for it with a hidden PowerShell prompt.
+`CONTROL_PLANE_API_KEY` is not stored. The tunnel launcher reads it from the
+current environment or asks for it using a hidden prompt.
 
-If `tunnel-client.exe` is missing, the initializer opens the download pages and shows the recommended local path. Download it, place it there, rerun `init-windows.cmd`, then run `start-all.cmd`.
+### 3. Start MCP and tunnel
 
-### 2. Start MCP + tunnel
-
-After initialization, run:
+Run:
 
 ```text
 start-all.cmd
 ```
 
-It opens two windows:
+Keep both opened windows running while the ChatGPT connector is in use.
 
-1. MCP server window, using `start-mcp.local.cmd` or fallback `start-mcp.cmd`.
-2. Tunnel window, using `start-tunnel.local.cmd`.
-
-Keep both windows running while using the ChatGPT connector.
-
-### 3. Optional single-purpose launchers
+Single-purpose launchers are also available:
 
 ```text
 start-mcp.cmd       # local MCP server only
 start-tunnel.cmd    # private tunnel only, after initialization
 ```
 
-`start-mcp.cmd` reads `config.json` from the project root. Environment variables and explicit PowerShell parameters still override `config.json`, which is useful for one-off tests.
+### 4. Configure ChatGPT
 
----
+Create a custom connector that uses the private tunnel and choose
+**No Authentication**. The local server itself should remain bound to
+`127.0.0.1`.
 
-## Configuration reference
+## Manual installation (Windows, macOS, Linux)
 
-`config.json` is the normal local configuration file. `dist/server.js` reads it directly, and `scripts/start-mcp.ps1` also maps launcher-only settings such as runtime/proxy values to environment variables before startup.
+```bash
+git clone https://github.com/Kerberos255/chatgpt-codex-tools-mcp.git
+cd chatgpt-codex-tools-mcp
+npm ci
+npm run build
+```
+
+Create your local configuration from the public template:
+
+```bash
+cp config.example.json config.json
+```
+
+On Windows PowerShell:
+
+```powershell
+Copy-Item config.example.json config.json
+```
+
+Edit `config.json`, then start:
+
+```bash
+npm start
+```
+
+Environment variables and explicit PowerShell parameters override
+`config.json`. Without a config file, conservative defaults are used.
+
+## Connection path
+
+```text
+ChatGPT custom connector
+  -> private Secure MCP Tunnel
+  -> tunnel-client on your machine
+  -> http://127.0.0.1:3333/mcp
+  -> chatgpt-codex-tools-mcp
+  -> allowed local workspaces only
+```
+
+Health endpoint:
+
+```text
+http://127.0.0.1:3333/healthz
+```
+
+A raw GET request to `/mcp` may return `No valid MCP session`; that is normal
+until an MCP session has been initialized.
+
+## Tools
+
+| Group | Tools | Purpose |
+| --- | --- | --- |
+| Meta | `local_status` | Show version, access mode, roots, limits, and optional feature status. |
+| Workspace | `open_workspace` | Open a directory under `CTM_ALLOWED_ROOTS` and return a `workspaceId`. |
+| Read | `list_dir`, `read_file`, `search_files`, `find_files`, `project_tree` | Inspect project content without writing. |
+| Git | `git_status`, `git_diff` | Review working-tree state and staged/unstaged diffs. |
+| Edit | `preview_edit`, `confirm_edit` | Preview and then apply bounded multi-file edits. |
+| Process | `exec_process`, `process_start`, `process_read`, `process_stop` | Run structured local executables without a shell. |
+| SQLite | `sqlite_status`, `sqlite_schema`, `sqlite_select`, `sqlite_preview_change`, `sqlite_confirm_change` | Optional allowlisted database inspection and structured writes. |
+| Web | `web_status`, `web_search`, `web_fetch` | Optional SearXNG search and public HTTP fetch. |
+
+Optional web and SQLite tools are registered only when enabled. Their status
+tools remain available for diagnostics.
+
+## Recommended workflow
+
+```text
+open_workspace
+  -> inspect with read/search/tree and git tools
+  -> preview_edit
+  -> review the diff
+  -> confirm_edit
+```
+
+For processes, pass a real executable and an argv array:
+
+```json
+{
+  "command": "npm",
+  "args": ["run", "build"]
+}
+```
+
+Pipes, redirects, command chaining, shell expansion, and shell builtins are not
+supported.
+
+## Access modes
+
+```text
+CTM_ACCESS_MODE=review   # default
+CTM_ACCESS_MODE=full
+```
+
+- `review` permits a small inspection/test process allowlist.
+- `full` permits broader structured executables.
+- Both modes still block direct shells (`cmd`, PowerShell, `sh`, `bash`) and
+  dangerous process patterns.
+- Specialized read, Git, edit, web, and SQLite tools should be preferred over
+  generic process execution.
+
+## Configuration
+
+`config.example.json` is the public template. `config.json` is local, generated
+or copied by the user, and ignored by Git.
 
 ```json
 {
@@ -237,13 +225,13 @@ start-tunnel.cmd    # private tunnel only, after initialization
   },
   "runtime": {
     "codexRuntimeRoot": "",
-    "fallbackNodeBin": "C:\\Tools\\nodejs",
-    "npmCache": "D:\\npm-cache"
+    "fallbackNodeBin": "",
+    "npmCache": ""
   },
   "proxy": {
-    "url": "http://127.0.0.1:10808",
+    "url": "",
     "noProxy": "127.0.0.1,localhost,::1",
-    "nodeUseEnvProxy": true
+    "nodeUseEnvProxy": false
   },
   "web": {
     "enabled": false,
@@ -261,135 +249,164 @@ start-tunnel.cmd    # private tunnel only, after initialization
 }
 ```
 
-| JSON path | Environment variable | Default | Notes |
-| --- | --- | --- | --- |
-| `mcp.host` | `HOST` | `127.0.0.1` | Keep local unless you add your own protection. |
-| `mcp.port` | `PORT` | `3333` | Local HTTP port. |
-| `mcp.allowedRoots` | `CTM_ALLOWED_ROOTS` | project root | Array or comma-separated string of allowed workspace roots. |
-| `mcp.accessMode` | `CTM_ACCESS_MODE` | `review` | `review` or `full`. |
-| `mcp.denyGlobs` | `CTM_DENY_GLOBS` | built-in deny list | Extra deny rules as an array or comma-separated string. |
-| `mcp.maxReadBytes` | `CTM_MAX_READ_BYTES` | `200000` | Max bytes returned by file reads. |
-| `mcp.maxOutputBytes` | `CTM_MAX_OUTPUT_BYTES` | `200000` | Max bytes returned by process/git output. |
-| `runtime.codexRuntimeRoot` | `CTM_CODEX_RUNTIME_ROOT` | Codex bundled runtime folder | Advanced override for Codex's bundled Node runtime search root. |
-| `runtime.fallbackNodeBin` | `OPENCLAW_NODE_BIN` | none | Optional folder containing `node.exe`. |
-| `runtime.npmCache` | `CTM_NPM_CACHE` | none | Optional npm cache folder location. |
-| `proxy.url` | `PROXY_URL`, `HTTP_PROXY`, `HTTPS_PROXY` | none | Optional outbound proxy for Node/web requests. |
-| `proxy.noProxy` | `NO_PROXY` | none | Hosts that should bypass the proxy. |
-| `proxy.nodeUseEnvProxy` | `NODE_USE_ENV_PROXY` | none | Set `true` for Node versions that honor env proxy settings. |
-| `web.enabled` | `CTM_WEB_TOOLS` | disabled | Enables optional `web_search` and `web_fetch`. `web_status` is always available. |
-| `web.searchProvider` | `CTM_SEARCH_PROVIDER` | `none` | `none` or `searxng`. Requires `web.enabled=true`. |
-| `web.searxngUrl` | `CTM_SEARXNG_URL` | none | SearXNG instance URL. Required when `searchProvider=searxng`. |
-| `web.maxBytes` | `CTM_WEB_MAX_BYTES` | `200000` | Max bytes returned by `web_fetch`. |
-| `web.timeoutMs` | `CTM_WEB_TIMEOUT_MS` | `15000` | Timeout for each web request. |
-| `sqlite.enabled` | `CTM_SQLITE_TOOLS` | disabled | Enables optional SQLite tools. |
-| `sqlite.allowedDbs` | `CTM_SQLITE_ALLOWED_DBS` | none | Array or comma-separated list of absolute SQLite database paths. |
-| `sqlite.maxRows` | `CTM_SQLITE_MAX_ROWS` | `100` | Max rows returned by SQLite tools. |
-| `environment` | any variable | none | Optional object for advanced environment defaults not covered above. |
+Common environment overrides:
 
-`config.json` should not contain tunnel runtime keys. Keep `CONTROL_PLANE_API_KEY` in your current environment, a local key file, or a private launcher.
+| Setting | Environment variable | Default |
+| --- | --- | --- |
+| Host / port | `HOST`, `PORT` | `127.0.0.1`, `3333` |
+| Allowed roots | `CTM_ALLOWED_ROOTS` | current project directory |
+| Access mode | `CTM_ACCESS_MODE` | `review` |
+| Extra deny rules | `CTM_DENY_GLOBS` | built-in deny list |
+| Read/output caps | `CTM_MAX_READ_BYTES`, `CTM_MAX_OUTPUT_BYTES` | `200000` |
+| Web tools | `CTM_WEB_TOOLS` | disabled |
+| Search provider | `CTM_SEARCH_PROVIDER`, `CTM_SEARXNG_URL` | `none` |
+| Web limits | `CTM_WEB_MAX_BYTES`, `CTM_WEB_TIMEOUT_MS` | `200000`, `15000` |
+| SQLite tools | `CTM_SQLITE_TOOLS` | disabled |
+| SQLite allowlist | `CTM_SQLITE_ALLOWED_DBS` | empty |
+| SQLite row cap | `CTM_SQLITE_MAX_ROWS` | `100` |
+| Config path | `CTM_CONFIG_PATH` | `<project>/config.json` |
 
-### SQLite tools
+See `env.example` for advanced runtime and proxy overrides.
 
-SQLite tools are opt-in and path-allowlisted. `sqlite_select` is read-only: it accepts one `SELECT`/`WITH` statement or a small set of safe `PRAGMA` statements.
+Do not put tunnel runtime keys in `config.json`. Keep
+`CONTROL_PLANE_API_KEY` in the current environment or another private local
+mechanism.
 
-Structured writes use a preview-then-confirm flow:
+## Optional web tools
 
-```text
-sqlite_preview_change  →  returns action_id + before/after diff
-sqlite_confirm_change  →  applies by action_id, re-verifies expected fields
-```
-
-Supported change types:
-- **insert** – `table`, `columns`, `values`
-- **update** – `table`, `set`, `where` (AND only), `limit` (default 1), `expected` (re-verify on confirm)
-- **delete** – `table`, `where`, `limit` (default 1), `expected`
-- **jsonSet** – use dot-path keys like `job_json.enabled` in `set` to update individual fields in a JSON text column via SQLite `json_set()`. The part before the first dot is the column name; the path after the dot navigates the JSON structure.
-
-Table and column names are validated as safe SQL identifiers. WHERE only allows simple AND-joined conditions with parameterized values. No raw write SQL or subqueries.
-
-Example:
+Enable in `config.json`:
 
 ```json
 {
-  "change": {
-    "type": "update",
-    "table": "cron_jobs",
-    "set": { "name": "new-name", "job_json.enabled": false },
-    "where": [{ "column": "job_id", "operator": "=", "value": "job_xxx" }],
-    "expected": { "name": "old-name", "updated_at": 1712345678000 }
+  "web": {
+    "enabled": true,
+    "searchProvider": "searxng",
+    "searxngUrl": "http://127.0.0.1:8888"
   }
 }
 ```
 
-### File editing tools
+- `web_search` queries only the configured SearXNG instance.
+- `web_fetch` accepts public HTTP(S) URLs and blocks localhost, private network
+  targets, embedded credentials, and unsafe redirects.
+- No cookies, browser login state, authorization headers, or client certificates
+  are forwarded.
 
-File edits use a preview-then-confirm flow:
+## Optional SQLite tools
 
-```text
-preview_edit  →  returns action_id + diffs per change
-confirm_edit  →  applies all changes in the batch
+Enable SQLite and list exact database paths:
+
+```json
+{
+  "sqlite": {
+    "enabled": true,
+    "allowedDbs": ["D:\\Data\\app.sqlite"],
+    "maxRows": 100
+  }
+}
 ```
 
-Supported edit types (`changes[].type`):
+- `sqlite_schema` reads schema metadata.
+- `sqlite_select` accepts one read-only `SELECT`/`WITH` or safe `PRAGMA`.
+- Writes use `sqlite_preview_change` followed by `sqlite_confirm_change`.
+- Insert, bounded update/delete, expected-field revalidation, and `jsonSet`
+  dot paths such as `job_json.enabled` are supported.
+- Raw write SQL and subqueries are not exposed.
 
-| Type | Fields | Use case |
-| --- | --- | --- |
-| `replace_text` | `path`, `oldText`, `newText` | Find and replace exact text (backward compat with old patch flow). |
-| `replace_range` | `path`, `startLine`, `endLine`, `newText` | Replace a line range with new content. |
-| `insert_before` | `path`, `anchor`, `text` | Insert text before first occurrence of anchor. |
-| `insert_after` | `path`, `anchorAfter`, `text` | Insert text after first occurrence of anchor. |
-| `append` | `path`, `text` | Append text to end of file. |
-| `create` | `path`, `text` | Create a new file (errors if exists). |
-| `overwrite` | `path`, `newText` | Overwrite entire file content. |
-| `rename` | `path`, `newPath` | Rename/move a file. |
-| `delete` | `path` | Delete a file. |
+## File edit operations
 
-### Search globs
+`preview_edit` accepts multi-file batches with these operation types:
 
-`search_files` uses ripgrep (`rg`) when available, then falls back to a built-in Node search. `search_files.include`, `search_files.exclude`, and `find_files.pattern` accept common glob patterns:
+```text
+replace_text   replace_range   insert_before   insert_after
+append         create          overwrite       rename         delete
+```
 
-- `*.ts` matches basenames anywhere in the searched tree.
-- `src/**/*.ts` matches both `src/app.ts` and nested files such as `src/lib/app.ts`.
-- Comma-separated patterns and brace alternatives are supported, for example `*.ts,*.tsx` or `{*.ts,*.tsx}`.
+The preview returns an action id and per-file diffs. `confirm_edit` rechecks
+workspace and deny boundaries before applying the batch. File batches are not
+transactional, so keep related edits small and review the entire preview.
 
-### Git diff options
+## Security rules
 
-`git_diff` defaults to unstaged `git diff --stat` plus full `git diff`. Optional inputs:
+- Keep `HOST=127.0.0.1`.
+- Use narrow allowed roots; never use an entire system drive or `/`.
+- Keep `review` mode unless broader process execution is required.
+- Do not expose the endpoint directly to the internet.
+- Keep web and SQLite tools disabled unless needed.
+- Treat redaction as a final safety net, not the primary boundary.
+- Review every edit and SQLite preview before confirming.
 
-- `staged: true` reads staged/cached changes.
-- `path: "src/server.ts"` limits diff output to a file or directory.
-- `statOnly: true` returns only `git diff --stat`.
-- `maxBytes` lowers the output cap for large diffs.
+See [`SECURITY.md`](SECURITY.md) for the full policy.
 
----
+## Development
+
+```bash
+npm ci
+npm run typecheck
+npm run build
+npm test
+npm run check
+```
+
+The test suite covers configuration precedence, glob matching, secret
+redaction, optional SQLite loading, repository/version consistency, and CI/CD
+gates.
+
+## CI and releases
+
+Pull requests run CI on Node.js 20 and 24, smoke-test the HTTP server, parse all
+PowerShell scripts on Windows, and perform a release-package dry run.
+
+Pushing a tag that exactly matches `package.json`, such as `v0.4.8`, triggers
+the Release workflow. It verifies that the tagged commit belongs to `main`,
+runs the full checks, builds a ZIP containing source plus compiled `dist`,
+generates `SHA256SUMS.txt`, and creates the GitHub Release.
 
 ## Troubleshooting
 
-### `No valid MCP session`
-
-Normal for a raw GET request to `/mcp`. It only means the server is alive but no MCP session was initialized.
-
 ### ChatGPT asks for login
 
-Create a fresh connector and choose **No Authentication / 未授权**. Old connector settings may still remember an OAuth flow.
+Create a new connector and choose **No Authentication**. Old connector settings
+may retain a previous OAuth choice.
 
 ### Path is outside allowed roots
 
-Add the project parent folder to `CTM_ALLOWED_ROOTS`, then restart the MCP server.
+Add the project parent directory to `mcp.allowedRoots` or
+`CTM_ALLOWED_ROOTS`, then restart the server.
 
 ### Process command is blocked
 
-Use read/search/git/edit/SQLite tools where possible. For execution, pass a real executable and `args[]` to `exec_process` or `process_start`; shell syntax and shell executables are intentionally unavailable.
+Use specialized tools first. In `review` mode, only the small process allowlist
+is accepted. Shell executables and shell syntax are blocked in every mode.
 
-### SQLite tools are not available
+### SQLite tools are unavailable
 
-Set `CTM_SQLITE_TOOLS=1`, add the database to `CTM_SQLITE_ALLOWED_DBS`, use a Node.js runtime with `node:sqlite`, then restart the MCP server.
+Enable SQLite, add an exact database path, and use a Node runtime with
+`node:sqlite` support. `sqlite_status` reports whether the current runtime has
+that module.
 
-### `dist/server.js not found`
-
-Run:
+### `dist/server.js` is missing
 
 ```bash
-npm install
+npm ci
 npm run build
 ```
+
+### Tunnel client is missing
+
+Download `tunnel-client` from OpenAI Platform tunnel settings, place it at the
+path shown by `init-windows.cmd`, and rerun initialization.
+
+## Repository boundaries
+
+The repository and Release package do not include:
+
+- `node_modules`
+- local `config.json`
+- tunnel runtime keys
+- generated local launchers
+- logs or workspace data
+
+## License
+
+MIT. See [`LICENSE`](LICENSE).

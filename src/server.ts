@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { readdir, readFile, stat } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { join, relative, sep, resolve as pathResolve } from "node:path";
 import express from "express";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -23,7 +24,8 @@ import {
 import { webFetch, webSearch, webStatus } from "./web.js";
 import { WorkspaceRegistry } from "./workspaces.js";
 
-const SERVER_VERSION = "0.4.6";
+const packageMetadata = createRequire(import.meta.url)("../package.json") as { version?: unknown };
+const SERVER_VERSION = typeof packageMetadata.version === "string" ? packageMetadata.version : "0.0.0";
 
 const TOOL_GROUPS = [
   { type: "meta", tools: ["local_status"] },
