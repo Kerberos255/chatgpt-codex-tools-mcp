@@ -1,5 +1,25 @@
 # Changelog
 
+## v0.4.8 (2026-07-10)
+
+### Fixes
+
+- Load `node:sqlite` lazily, so the core MCP server can start on Node.js 20 when optional SQLite tools are disabled.
+- Derive the MCP server version from `package.json` to prevent release/version drift.
+- Replace the tracked local `config.json` with a public `config.example.json`; generated local configuration is now ignored by Git.
+
+### Improvements
+
+- Added automated CI for Node.js 20/24, Windows PowerShell parsing, tests, server smoke checks, and release-package dry runs.
+- Added tag-triggered Release automation with package-version and `main` ancestry gates, ZIP packaging, and SHA-256 checksums.
+- Refreshed the English/Chinese README and security policy to match the current no-shell process and generic SQLite workflows.
+
+## v0.4.7 (2026-07-08)
+
+### Fixes
+
+- Added a 30-minute inactivity TTL and periodic cleanup for stale MCP HTTP sessions, preventing unbounded session-map growth after dropped connections.
+
 ## v0.4.6 (2026-07-03)
 
 ### Improvements

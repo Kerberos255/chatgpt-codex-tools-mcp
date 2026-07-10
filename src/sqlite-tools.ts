@@ -1,8 +1,24 @@
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
+import { createRequire } from "node:module";
 import { resolve } from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import type { DatabaseSync } from "node:sqlite";
 import type { Config } from "./config.js";
+
+type DatabaseSyncConstructor = typeof import("node:sqlite").DatabaseSync;
+const nodeRequire = createRequire(import.meta.url);
+let cachedDatabaseSync: DatabaseSyncConstructor | null | undefined;
+
+function getDatabaseSync(): DatabaseSyncConstructor | null {
+  if (cachedDatabaseSync !== undefined) return cachedDatabaseSync;
+  try {
+    const sqlite = nodeRequire("node:sqlite") as typeof import("node:sqlite");
+    cachedDatabaseSync = sqlite.DatabaseSync;
+  } catch {
+    cachedDatabaseSync = null;
+  }
+  return cachedDatabaseSync;
+}
 
 // --- Pending SQLite Change Store ---
 
@@ -85,7 +101,7 @@ export function sqliteStatus(config: Config) {
     enabled: config.sqliteToolsEnabled,
     allowedDbs: config.sqliteAllowedDbs,
     maxRows: config.sqliteMaxRows,
-    nodeSqlite: true,
+    nodeSqlite: Boolean(getDatabaseSync()),
   };
 }
 
@@ -546,7 +562,11 @@ function singleAllowedDb(config: Config): string {
 }
 
 function openDb(path: string, readOnly: boolean): DatabaseSync {
-  return new DatabaseSync(path, { readOnly, timeout: 5000 });
+  const DatabaseSyncImpl = getDatabaseSync();
+  if (!DatabaseSyncImpl) {
+    throw new Error("SQLite tools require a Node.js runtime with node:sqlite support. Use Node.js 22.5+; Node.js 24+ is recommended.");
+  }
+  return new DatabaseSyncImpl(path, { readOnly, timeout: 5000 });
 }
 
 function assertReadOnlySql(sql: string) {

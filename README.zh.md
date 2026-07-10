@@ -1,171 +1,56 @@
-English | [中文](./README.zh.md)
+[English](./README.md) | 简体中文
 
 # chatgpt-codex-tools-mcp
 
-通过 MCP 向 ChatGPT 暴露 Codex 风格的本地工作区工具。
+这是一个本地 MCP 服务，为 ChatGPT 提供受约束的 Codex 风格项目工具箱。
 
-ChatGPT 负责推理。此服务仅提供受限制的本地工具：打开工作区、列出/读取/搜索/树状浏览文件、查看 Git 状态、预览-确认文件编辑、以无 Shell 的结构化方式运行本地进程，以及可选的基于结构化预览-确认流程的 SQLite 查询与修改。
+ChatGPT 负责推理；本服务负责限定工作区的文件读取、搜索、Git 检查、预览后确认
+的编辑、无 Shell 的结构化进程执行，以及可选 Web 与 SQLite 工具。
 
-> 不与 OpenAI 或 Codex 关联。这是一个社区/本地工具层，以小型 Codex 风格工具箱的形式为 ChatGPT 提供服务。
+> 社区项目，不隶属于 OpenAI 或 Codex。
+>
+> MCP 端点没有应用层认证。请保持绑定 `127.0.0.1`，并通过私有 MCP 隧道连接；
+> 不要直接暴露到公网。
 
----
+## 主要功能
 
-## 这是什么
-
-`chatgpt-codex-tools-mcp` 是一个本地 HTTP MCP 服务，适用于既希望 ChatGPT 检查和编辑本地项目，又不希望赋予其广泛的 Shell 或公网访问权限的用户。
-
-推荐流程：
-
-```text
-ChatGPT 自定义连接器
-  → 私有 MCP 隧道
-  → 你机器上的隧道客户端
-  → http://127.0.0.1:3333/mcp
-  → 此本地 MCP 服务器
-  → 仅限允许的本地工作区
-```
-
-默认公开模板使用 **No Authentication（无认证）** 的 MCP 应用层设置。这是有意为之，适用于私有/本地隧道场景，但也意味着**不应**将此服务直接暴露在公网上。
-
----
-
-## 特性
-
-- 仅本地 HTTP 服务，默认绑定 `127.0.0.1`
-- 通过 `CTM_ALLOWED_ROOTS` 限定工作区范围
-- 通用私有文件和敏感路径的拒绝规则
-- 读/列出/搜索/查找/树状浏览等检查工具
-- 9 种编辑类型、支持多文件批处理的预览-确认文件编辑流程
-- Git 状态/差异查看工具
-- 结构化前台/后台进程工具（`exec_process`、`process_start`、`process_read`、`process_stop`），使用 argv 数组，不支持 Shell 语法
-- 工具输出中的智能值脱敏（尽力而为）
-- 提供 Windows 辅助脚本，可复用 Codex 自带 Node 运行时
-- 可选 Web 工具（默认禁用）：SearXNG 搜索和公共 HTTP 抓取
-- 可选 SQLite 工具（默认禁用）：白名单只读查询 + 结构化预览-确认更新，支持 jsonSet
-
----
-
-## 向 ChatGPT 暴露的工具
-
-| 类型 | 工具 | 用途 |
-| --- | --- | --- |
-| Meta | `local_status` | 服务状态、访问模式、允许根路径、能力、功能标志和工具分组。 |
-| Workspace | `open_workspace` | 在 `CTM_ALLOWED_ROOTS` 下打开一个本地项目目录，获取可复用的 workspaceId。 |
-| Read | `list_dir` | 列出打开的工作区中的文件。 |
-| Read | `read_file` | 读取 UTF-8 文本文件，带输出大小限制。 |
-| Read | `search_files` | 在工作区内全文搜索。可用时优先使用 `rg`。支持大小写、上下文行数、最大匹配数和包含/排除 glob 模式。 |
-| Read | `find_files` | 通过 glob 模式查找文件（如 `*.ts`、`**/config*`）。 |
-| Read | `project_tree` | 展示可视化的目录树（限制深度，跳过 node_modules/dist/.git）。 |
-| Git | `git_status` | 通过结构化进程 runner 运行 `git status --short`。 |
-| Git | `git_diff` | 查看未暂存或已暂存的 Git diff，可只看统计或限定到某个路径。 |
-| Edit/write | `preview_edit` | **（推荐）** 创建待处理的多文件编辑批次。支持 replace_text、replace_range、insert_before、insert_after、append、create、overwrite、rename、delete。 |
-| Edit/write | `confirm_edit` | 按 actionId 应用待处理的编辑批次。 |
-| Exec | `exec_process` | 用 `command` + `args[]` 运行短前台进程，无 Shell。 |
-| Process | `process_start` | 用 `command` + `args[]` 启动长运行进程，无 Shell。 |
-| Process | `process_read` | 读取托管进程的 stdout/stderr/退出状态。 |
-| Process | `process_stop` | 停止托管进程。 |
-| SQLite | `sqlite_status` | 显示 SQLite 工具配置。始终可用。 |
-| SQLite | `sqlite_schema` * | 查看白名单数据库的表结构。 |
-| SQLite | `sqlite_select` * | 运行一条只读 `SELECT`/`WITH` 或安全的 `PRAGMA`。 |
-| SQLite | `sqlite_preview_change` * | 预览对白名单数据库的结构化 insert/update/delete。支持通过点分路径键（如 `job_json.enabled`）进行 jsonSet。在确认前不会实际写入。 |
-| SQLite | `sqlite_confirm_change` * | 按 actionId 应用待处理的 SQLite 更改。在写入前会重新验证 'expected' 字段。 |
-| Web | `web_status` | 显示 Web 工具配置。始终可用。 |
-| Web | `web_search` * | 通过 SearXNG 搜索网络。 |
-| Web | `web_fetch` * | 获取公共 HTTP(S) 页面。阻止 localhost、私有网络和凭据信息。 |
-
-\* *可选工具，默认禁用，仅在启用相应功能标志后可用。*
-
----
-
-## 安全模型
-
-默认设置为有意保守：
-
-```text
-HOST=127.0.0.1
-PORT=3333
-CTM_ACCESS_MODE=review
-```
-
-**重要规则：**
-
-- 个人使用请保持 `HOST=127.0.0.1`。
-- 除非完全理解风险，否则保持 `CTM_ACCESS_MODE=review`。
-- 将 `CTM_ALLOWED_ROOTS` 设置得尽量窄，例如 `D:\Projects`。
-- 不要将允许根路径设为整个系统盘。
-- 请通过私有隧道使用，而非公网 URL。
-- 在 ChatGPT 连接器配置中选择 **No Authentication / 未授权**。
-- 输出脱敏只是安全网，不能替代窄化 `CTM_ALLOWED_ROOTS`、deny 规则和 SQLite 白名单配置。
-- 大型编辑和 SQLite 修改参数会被拒绝；请拆成更小的 preview 调用。
-
-不再暴露 Shell 工具。优先使用专用工具（`read_file`、`search_files`、`git_status`、`git_diff`、`preview_edit`、SQLite 工具）。确实需要运行命令时，使用 `exec_process` 或 `process_start`，传入 `command` 和 `args[]` 数组。管道、重定向、glob 展开、命令串联、Shell 内置命令都不支持。
-
-`review` 模式会阻止危险进程模式，仅允许一小部分检查/测试可执行程序，如 `git status`、`git diff`、`rg`、`pytest`、Node/Python 版本检查和包管理器的 `test`/`run` 命令。`full` 模式仍会阻止直接启动 `cmd`、`powershell`、`pwsh`、`sh`、`bash` 等 Shell 可执行程序。
-
----
+- 本地 HTTP MCP 地址：`http://127.0.0.1:3333/mcp`
+- 通过 `CTM_ALLOWED_ROOTS` 限定工作区
+- 内置常见私密文件和敏感路径拒绝规则
+- 文件与 SQLite 写入均采用预览-确认流程
+- 使用结构化 `command` + `args[]` 执行，不提供 Shell 工具或 Shell 语法
+- 支持有超时和输出上限的前台、后台托管进程
+- 工具输出尽力进行敏感值脱敏
+- 可选 SearXNG 搜索和公共 HTTP 抓取，默认关闭
+- 可选白名单 SQLite 读取和受限结构化写入，默认关闭
+- Windows 初始化器，以及 MCP/私有隧道启动脚本
 
 ## 环境要求
 
-- Node.js 20+（推荐）
+- 核心服务需要 Node.js 20 或更高版本；推荐 Node.js 24
 - npm
-- 能够连接 MCP 服务的 ChatGPT 自定义连接器
-- 如果 ChatGPT 需要通过 Secure MCP Tunnel 连接此本地服务，则需要 OpenAI 的 `tunnel-client`
-- 在 OpenAI Platform 隧道设置中创建的隧道 ID 和运行时密钥
-- 可选 SQLite 工具需要支持 `node:sqlite` 的 Node.js 运行时（推荐 Node.js 24+）
+- 支持 Secure MCP Tunnel 的 ChatGPT 自定义连接器
+- ChatGPT 需要访问本机端点时，使用 OpenAI `tunnel-client`
+- SQLite 工具需要支持 `node:sqlite` 的运行时（Node.js 22.5+；推荐 24+）
 
-在 Windows 上，辅助脚本按以下顺序查找 Node：
+Windows 下，`scripts/start-mcp.ps1` 按以下顺序寻找 Node：
 
-1. `%LOCALAPPDATA%\OpenAI\Codex\runtimes\cua_node` 下的 Codex 捆绑 Node 运行时。
-2. 你设置的 `OPENCLAW_NODE_BIN`。
-3. `PATH` 上的 `node`。
+1. `%LOCALAPPDATA%\OpenAI\Codex\runtimes\cua_node` 中的 Codex 捆绑运行时
+2. `OPENCLAW_NODE_BIN`
+3. `PATH` 中的 `node`
 
----
+## Windows 快速开始
 
-## 安装
+### 1. 获取项目
 
-```bash
-git clone https://github.com/Kerberos255/chatgpt-codex-tools-mcp.git
-cd chatgpt-codex-tools-mcp
-npm install
-npm run build
-```
-
-启动前设置允许的工作区根路径：
-
-### Windows PowerShell
+下载最新 GitHub Release 附带的 ZIP 并解压，或克隆仓库：
 
 ```powershell
-$env:CTM_ALLOWED_ROOTS = "D:\Projects"
-$env:CTM_ACCESS_MODE = "review"
-npm run build
-node dist/server.js
+git clone https://github.com/Kerberos255/chatgpt-codex-tools-mcp.git
+cd chatgpt-codex-tools-mcp
 ```
 
-### macOS / Linux
-
-```bash
-export CTM_ALLOWED_ROOTS="$HOME/projects"
-export CTM_ACCESS_MODE="review"
-npm run build
-node dist/server.js
-```
-
-服务应输出类似：
-
-```text
-chatgpt-codex-tools-mcp listening on http://127.0.0.1:3333/mcp
-allowed roots: D:\Projects
-access mode: review
-auth: no authentication (use only behind a private/local tunnel)
-```
-
----
-
-## Windows 快速启动
-
-对于普通 Windows 用户，使用根目录下的 `.cmd` 文件。`scripts/` 目录下的 PowerShell 脚本为内部实现和高级入口点。
-
-### 第一步：初始化
+### 2. 初始化一次
 
 运行：
 
@@ -173,15 +58,15 @@ auth: no authentication (use only behind a private/local tunnel)
 init-windows.cmd
 ```
 
-初始化程序会要求你配置：
+初始化器会：
 
-1. 允许的工作区根路径，例如 `D:\Projects`。
-2. npm 依赖和 `dist/server.js` 构建输出。
-3. 本地 `tunnel-client.exe` 路径。
-4. 本地 MCP 启动配置 `config.json`。
-5. 为本机生成的仅本地隧道启动文件。
+- 询问较窄的允许工作区根路径，例如 `D:\Projects`
+- 安装 npm 依赖并构建 `dist/server.js`
+- 定位本机 `tunnel-client.exe`
+- 创建被 Git 忽略的本地 `config.json`
+- 创建仅供本机使用的 MCP 和隧道启动器
 
-它会创建或更新以下本地文件：
+生成的本地文件包括：
 
 ```text
 config.json
@@ -190,39 +75,133 @@ start-tunnel.local.cmd
 start-tunnel.local.ps1
 ```
 
-初始化程序**不会**保存你的运行时密钥。隧道启动时，如果当前环境变量中存在 `CONTROL_PLANE_API_KEY` 则使用该值；否则会通过隐藏的 PowerShell 提示符要求你输入。
+初始化器不会保存 `CONTROL_PLANE_API_KEY`。隧道启动器从当前环境读取，或通过
+隐藏输入框临时询问。
 
-如果缺少 `tunnel-client.exe`，初始化程序会打开下载页面并显示推荐的本地路径。请下载并放置到该位置，重新运行 `init-windows.cmd`，然后运行 `start-all.cmd`。
+### 3. 启动 MCP 与隧道
 
-### 第二步：启动 MCP + 隧道
-
-初始化后运行：
+运行：
 
 ```text
 start-all.cmd
 ```
 
-它将打开两个窗口：
+使用 ChatGPT 连接器期间，请保持打开的两个窗口运行。
 
-1. MCP 服务窗口，使用 `start-mcp.local.cmd` 或后备方案 `start-mcp.cmd`。
-2. 隧道窗口，使用 `start-tunnel.local.cmd`。
-
-使用 ChatGPT 连接器时请保持两个窗口都运行。
-
-### 第三步：可选的单一用途启动器
+也可以单独启动：
 
 ```text
-start-mcp.cmd       # 仅启动本地 MCP 服务
-start-tunnel.cmd    # 仅启动私有隧道（初始化后）
+start-mcp.cmd       # 仅本地 MCP 服务
+start-tunnel.cmd    # 仅私有隧道，需先初始化
 ```
 
-`start-mcp.cmd` 会读取项目根目录的 `config.json`。环境变量和显式 PowerShell 参数仍可覆盖 `config.json`，适合临时测试。
+### 4. 配置 ChatGPT
 
----
+创建使用私有隧道的自定义连接器，并选择 **No Authentication / 未授权**。
+本地服务本身应继续绑定 `127.0.0.1`。
 
-## 配置参考
+## 手动安装（Windows、macOS、Linux）
 
-`config.json` 是常规本地配置文件。`dist/server.js` 会直接读取它；`scripts/start-mcp.ps1` 也会在启动前把 runtime/proxy 等仅启动器需要的配置映射为环境变量。
+```bash
+git clone https://github.com/Kerberos255/chatgpt-codex-tools-mcp.git
+cd chatgpt-codex-tools-mcp
+npm ci
+npm run build
+```
+
+从公开模板创建本地配置：
+
+```bash
+cp config.example.json config.json
+```
+
+Windows PowerShell：
+
+```powershell
+Copy-Item config.example.json config.json
+```
+
+编辑 `config.json` 后启动：
+
+```bash
+npm start
+```
+
+环境变量和显式 PowerShell 参数优先于 `config.json`。没有配置文件时，会使用保守
+默认值。
+
+## 连接路径
+
+```text
+ChatGPT 自定义连接器
+  → 私有 Secure MCP Tunnel
+  → 本机 tunnel-client
+  → http://127.0.0.1:3333/mcp
+  → chatgpt-codex-tools-mcp
+  → 仅允许的本地工作区
+```
+
+健康检查：
+
+```text
+http://127.0.0.1:3333/healthz
+```
+
+直接 GET `/mcp` 可能返回 `No valid MCP session`；在 MCP 会话尚未初始化时属于
+正常现象。
+
+## 工具目录
+
+| 分组 | 工具 | 用途 |
+| --- | --- | --- |
+| Meta | `local_status` | 查看版本、访问模式、根路径、限制和可选功能状态。 |
+| Workspace | `open_workspace` | 打开 `CTM_ALLOWED_ROOTS` 下的目录并返回 `workspaceId`。 |
+| Read | `list_dir`、`read_file`、`search_files`、`find_files`、`project_tree` | 只读检查项目内容。 |
+| Git | `git_status`、`git_diff` | 查看工作区状态和暂存/未暂存差异。 |
+| Edit | `preview_edit`、`confirm_edit` | 预览并应用受限的多文件编辑。 |
+| Process | `exec_process`、`process_start`、`process_read`、`process_stop` | 不经过 Shell 运行结构化本地进程。 |
+| SQLite | `sqlite_status`、`sqlite_schema`、`sqlite_select`、`sqlite_preview_change`、`sqlite_confirm_change` | 可选的白名单数据库检查与结构化写入。 |
+| Web | `web_status`、`web_search`、`web_fetch` | 可选的 SearXNG 搜索和公共 HTTP 抓取。 |
+
+Web 和 SQLite 的具体工具只在启用后注册；状态工具始终可用于诊断。
+
+## 推荐工作流
+
+```text
+open_workspace
+  → 使用 read/search/tree 和 Git 工具检查
+  → preview_edit
+  → 审阅 diff
+  → confirm_edit
+```
+
+进程执行需要传真实可执行文件和 argv 数组：
+
+```json
+{
+  "command": "npm",
+  "args": ["run", "build"]
+}
+```
+
+不支持管道、重定向、命令串联、Shell 展开或 Shell 内置命令。
+
+## 访问模式
+
+```text
+CTM_ACCESS_MODE=review   # 默认
+CTM_ACCESS_MODE=full
+```
+
+- `review` 只允许少量检查/测试进程。
+- `full` 允许更广的结构化可执行程序。
+- 两种模式仍会阻止直接 Shell（`cmd`、PowerShell、`sh`、`bash`）和危险参数模式。
+- 应优先使用专用的读取、Git、编辑、Web 和 SQLite 工具。
+
+## 配置
+
+`config.example.json` 是公开模板。`config.json` 由用户生成或复制，仅供本机使用，
+并被 Git 忽略。
 
 ```json
 {
@@ -237,13 +216,13 @@ start-tunnel.cmd    # 仅启动私有隧道（初始化后）
   },
   "runtime": {
     "codexRuntimeRoot": "",
-    "fallbackNodeBin": "C:\\Tools\\nodejs",
-    "npmCache": "D:\\npm-cache"
+    "fallbackNodeBin": "",
+    "npmCache": ""
   },
   "proxy": {
-    "url": "http://127.0.0.1:10808",
+    "url": "",
     "noProxy": "127.0.0.1,localhost,::1",
-    "nodeUseEnvProxy": true
+    "nodeUseEnvProxy": false
   },
   "web": {
     "enabled": false,
@@ -261,135 +240,157 @@ start-tunnel.cmd    # 仅启动私有隧道（初始化后）
 }
 ```
 
-| JSON 路径 | 环境变量 | 默认值 | 说明 |
-| --- | --- | --- | --- |
-| `mcp.host` | `HOST` | `127.0.0.1` | 除非你添加了自己的保护，否则保持本地绑定。 |
-| `mcp.port` | `PORT` | `3333` | 本地 HTTP 端口。 |
-| `mcp.allowedRoots` | `CTM_ALLOWED_ROOTS` | 项目根目录 | 允许的工作区根路径，支持数组或逗号分隔字符串。 |
-| `mcp.accessMode` | `CTM_ACCESS_MODE` | `review` | `review` 或 `full`。 |
-| `mcp.denyGlobs` | `CTM_DENY_GLOBS` | 内置拒绝列表 | 额外拒绝规则，支持数组或逗号分隔字符串。 |
-| `mcp.maxReadBytes` | `CTM_MAX_READ_BYTES` | `200000` | 文件读取返回的最大字节数。 |
-| `mcp.maxOutputBytes` | `CTM_MAX_OUTPUT_BYTES` | `200000` | 进程/Git 输出返回的最大字节数。 |
-| `runtime.codexRuntimeRoot` | `CTM_CODEX_RUNTIME_ROOT` | Codex 捆绑运行时目录 | 高级选项，用于覆盖 Codex Node 运行时搜索根目录。 |
-| `runtime.fallbackNodeBin` | `OPENCLAW_NODE_BIN` | 无 | 可选，包含 `node.exe` 的目录。 |
-| `runtime.npmCache` | `CTM_NPM_CACHE` | 无 | 可选 npm 缓存目录。 |
-| `proxy.url` | `PROXY_URL`、`HTTP_PROXY`、`HTTPS_PROXY` | 无 | 可选的 Node/Web 请求出站代理。 |
-| `proxy.noProxy` | `NO_PROXY` | 无 | 不走代理的主机列表。 |
-| `proxy.nodeUseEnvProxy` | `NODE_USE_ENV_PROXY` | 无 | 设为 `true` 时供支持环境代理的 Node 版本使用。 |
-| `web.enabled` | `CTM_WEB_TOOLS` | 关闭 | 启用可选 `web_search` 和 `web_fetch`。`web_status` 始终可用。 |
-| `web.searchProvider` | `CTM_SEARCH_PROVIDER` | `none` | `none` 或 `searxng`。需要 `web.enabled=true`。 |
-| `web.searxngUrl` | `CTM_SEARXNG_URL` | 无 | SearXNG 实例 URL。`searchProvider=searxng` 时必须设置。 |
-| `web.maxBytes` | `CTM_WEB_MAX_BYTES` | `200000` | `web_fetch` 返回的最大字节数。 |
-| `web.timeoutMs` | `CTM_WEB_TIMEOUT_MS` | `15000` | 每个网络请求的超时时间。 |
-| `sqlite.enabled` | `CTM_SQLITE_TOOLS` | 关闭 | 启用可选 SQLite 工具。 |
-| `sqlite.allowedDbs` | `CTM_SQLITE_ALLOWED_DBS` | 无 | 允许访问的 SQLite 数据库绝对路径，支持数组或逗号分隔字符串。 |
-| `sqlite.maxRows` | `CTM_SQLITE_MAX_ROWS` | `100` | SQLite 工具返回的最大行数。 |
-| `environment` | 任意变量 | 无 | 高级选项，用于设置上面没有覆盖的环境变量默认值。 |
+常用环境变量覆盖：
 
-`config.json` 不应存放隧道运行时密钥。`CONTROL_PLANE_API_KEY` 请继续放在当前环境变量、本地 key 文件或私有启动器中。
+| 设置 | 环境变量 | 默认值 |
+| --- | --- | --- |
+| 主机/端口 | `HOST`、`PORT` | `127.0.0.1`、`3333` |
+| 允许根路径 | `CTM_ALLOWED_ROOTS` | 当前项目目录 |
+| 访问模式 | `CTM_ACCESS_MODE` | `review` |
+| 附加拒绝规则 | `CTM_DENY_GLOBS` | 内置规则 |
+| 读取/输出上限 | `CTM_MAX_READ_BYTES`、`CTM_MAX_OUTPUT_BYTES` | `200000` |
+| Web 工具 | `CTM_WEB_TOOLS` | 关闭 |
+| 搜索后端 | `CTM_SEARCH_PROVIDER`、`CTM_SEARXNG_URL` | `none` |
+| Web 限制 | `CTM_WEB_MAX_BYTES`、`CTM_WEB_TIMEOUT_MS` | `200000`、`15000` |
+| SQLite 工具 | `CTM_SQLITE_TOOLS` | 关闭 |
+| SQLite 白名单 | `CTM_SQLITE_ALLOWED_DBS` | 空 |
+| SQLite 行数上限 | `CTM_SQLITE_MAX_ROWS` | `100` |
+| 配置路径 | `CTM_CONFIG_PATH` | `<项目>/config.json` |
 
-### SQLite 工具
+高级运行时和代理选项见 `env.example`。
 
-SQLite 工具是可选且路径白名单制的。`sqlite_select` 为只读：接受一条 `SELECT`/`WITH` 语句或一小部分安全的 `PRAGMA` 语句。
+不要把隧道运行密钥写入 `config.json`。`CONTROL_PLANE_API_KEY` 应放在当前环境或
+其他私有本地机制中。
 
-结构化写入使用预览-确认流程：
+## 可选 Web 工具
 
-```text
-sqlite_preview_change  →  返回 action_id + before/after 差异
-sqlite_confirm_change  →  通过 action_id 执行，重新验证 expected 字段
-```
-
-支持的修改类型：
-- **insert** – `table`、`columns`、`values`
-- **update** – `table`、`set`、`where`（仅 AND）、`limit`（默认 1）、`expected`（确认时重新验证）
-- **delete** – `table`、`where`、`limit`（默认 1）、`expected`
-- **jsonSet** – 在 `set` 中使用点分键（如 `job_json.enabled`）更新 JSON 文本列中的单个字段，通过 SQLite 的 `json_set()` 实现。第一个点之前为列名，点之后的路径用于导航 JSON 结构。
-
-表名和列名会经过安全标识符验证。WHERE 仅支持简单的 AND 连接条件，使用参数化值。不允许原始写入 SQL 或子查询。
-
-示例：
+在 `config.json` 中启用：
 
 ```json
 {
-  "change": {
-    "type": "update",
-    "table": "cron_jobs",
-    "set": { "name": "new-name", "job_json.enabled": false },
-    "where": [{ "column": "job_id", "operator": "=", "value": "job_xxx" }],
-    "expected": { "name": "old-name", "updated_at": 1712345678000 }
+  "web": {
+    "enabled": true,
+    "searchProvider": "searxng",
+    "searxngUrl": "http://127.0.0.1:8888"
   }
 }
 ```
 
-### 文件编辑工具
+- `web_search` 只查询配置的 SearXNG 实例。
+- `web_fetch` 只接受公共 HTTP(S) 地址，并阻止 localhost、私网目标、嵌入凭据和
+  不安全重定向。
+- 不转发 cookie、浏览器登录态、Authorization 头或客户端证书。
 
-文件编辑使用预览-确认流程：
+## 可选 SQLite 工具
 
-```text
-preview_edit  →  返回 action_id + 每个修改的差异
-confirm_edit  →  应用批次中的所有修改
+启用 SQLite 并列出精确数据库路径：
+
+```json
+{
+  "sqlite": {
+    "enabled": true,
+    "allowedDbs": ["D:\\Data\\app.sqlite"],
+    "maxRows": 100
+  }
+}
 ```
 
-支持的编辑类型（`changes[].type`）：
+- `sqlite_schema` 读取 schema 元数据。
+- `sqlite_select` 接受一条只读 `SELECT`/`WITH` 或安全 `PRAGMA`。
+- 写入使用 `sqlite_preview_change` 后接 `sqlite_confirm_change`。
+- 支持 insert、受限 update/delete、expected 字段复核，以及
+  `job_json.enabled` 形式的 `jsonSet` 点路径。
+- 不暴露原始写入 SQL 或子查询。
 
-| 类型 | 字段 | 用途 |
-| --- | --- | --- |
-| `replace_text` | `path`、`oldText`、`newText` | 精确文本查找替换（向后兼容旧版 patch 流程） |
-| `replace_range` | `path`、`startLine`、`endLine`、`newText` | 用新内容替换指定行范围 |
-| `insert_before` | `path`、`anchor`、`text` | 在 anchor 首次出现之前插入文本 |
-| `insert_after` | `path`、`anchorAfter`、`text` | 在 anchorAfter 首次出现之后插入文本 |
-| `append` | `path`、`text` | 在文件末尾追加文本 |
-| `create` | `path`、`text` | 创建新文件（已存在时报错） |
-| `overwrite` | `path`、`newText` | 覆盖整个文件内容 |
-| `rename` | `path`、`newPath` | 重命名/移动文件 |
-| `delete` | `path` | 删除文件 |
+## 文件编辑操作
 
-### 搜索 glob
+`preview_edit` 支持多文件批次和以下类型：
 
-`search_files` 可用时会优先使用 ripgrep（`rg`），找不到 `rg` 时回退到内置 Node 搜索。`search_files.include`、`search_files.exclude` 和 `find_files.pattern` 支持常见 glob 模式：
+```text
+replace_text   replace_range   insert_before   insert_after
+append         create          overwrite       rename         delete
+```
 
-- `*.ts` 会匹配搜索树下任意位置的文件名。
-- `src/**/*.ts` 会同时匹配 `src/app.ts` 和 `src/lib/app.ts` 这类嵌套文件。
-- 支持逗号分隔模式和花括号候选，例如 `*.ts,*.tsx` 或 `{*.ts,*.tsx}`。
+预览会返回 action id 和逐文件 diff。`confirm_edit` 在应用前重新检查工作区和拒绝
+边界。文件批次不是事务性的，因此应保持批次较小并审阅完整预览。
 
-### Git diff 选项
+## 安全规则
 
-`git_diff` 默认返回未暂存的 `git diff --stat` 加完整 `git diff`。可选输入：
+- 保持 `HOST=127.0.0.1`。
+- 允许根路径应尽量窄；不要使用整个系统盘或 `/`。
+- 除非确实需要更广的进程执行，否则保持 `review`。
+- 不要把端点直接暴露到公网。
+- 不需要时保持 Web 和 SQLite 工具关闭。
+- 脱敏只是最后一道安全网，不是主要边界。
+- 每次确认文件或 SQLite 写入前都应审阅预览。
 
-- `staged: true` 查看已暂存/cached 的修改。
-- `path: "src/server.ts"` 将 diff 限定到某个文件或目录。
-- `statOnly: true` 只返回 `git diff --stat`。
-- `maxBytes` 为大型 diff 设置更小的输出上限。
+完整策略见 [`SECURITY.md`](SECURITY.md)。
 
----
+## 开发
 
-## 故障排除
+```bash
+npm ci
+npm run typecheck
+npm run build
+npm test
+npm run check
+```
 
-### `No valid MCP session`
+测试覆盖配置优先级、glob 匹配、敏感值脱敏、可选 SQLite 加载、版本/仓库一致性
+和 CI/CD 闸门。
 
-对 `/mcp` 的原始 GET 请求属于正常行为。仅表示服务正在运行，但未初始化 MCP 会话。
+## CI 与 Release
+
+Pull Request 会在 Node.js 20 和 24 上运行 CI、启动 HTTP 服务做 smoke test、在
+Windows 上解析全部 PowerShell 脚本，并干跑一次 Release 打包。
+
+推送与 `package.json` 完全一致的标签（如 `v0.4.8`）后，会触发 Release 工作流。
+它会确认标签提交属于 `main`、重新运行完整检查、构建包含源码和已编译 `dist` 的
+ZIP、生成 `SHA256SUMS.txt`，并自动创建 GitHub Release。
+
+## 故障排查
 
 ### ChatGPT 要求登录
 
-创建一个全新的连接器，选择 **No Authentication / 未授权**。旧的连接器设置可能仍记得 OAuth 流程。
+新建连接器并选择 **No Authentication / 未授权**。旧连接器可能保留此前的 OAuth
+选择。
 
-### 路径超出允许根路径范围
+### 路径超出允许范围
 
-将该项目的父目录添加到 `CTM_ALLOWED_ROOTS`，然后重启 MCP 服务。
+把项目父目录添加到 `mcp.allowedRoots` 或 `CTM_ALLOWED_ROOTS`，然后重启服务。
 
 ### 进程命令被阻止
 
-请尽可能使用 read/search/git/edit/SQLite 工具。需要执行命令时，将真实可执行程序和 `args[]` 传给 `exec_process` 或 `process_start`；Shell 语法和 Shell 可执行程序会被刻意禁用。
+优先使用专用工具。`review` 模式只接受少量进程；所有模式都禁止 Shell 可执行文件
+和 Shell 语法。
 
 ### SQLite 工具不可用
 
-设置 `CTM_SQLITE_TOOLS=1`，将数据库添加到 `CTM_SQLITE_ALLOWED_DBS`，使用支持 `node:sqlite` 的 Node.js 运行时，然后重启 MCP 服务。
+启用 SQLite、添加精确数据库路径，并使用支持 `node:sqlite` 的 Node。可通过
+`sqlite_status` 查看当前运行时是否支持该模块。
 
-### `dist/server.js not found`
-
-运行：
+### 缺少 `dist/server.js`
 
 ```bash
-npm install
+npm ci
 npm run build
 ```
+
+### 缺少 tunnel-client
+
+从 OpenAI Platform 隧道设置下载 `tunnel-client`，放到 `init-windows.cmd` 显示的
+路径，再重新初始化。
+
+## 仓库边界
+
+仓库和 Release 包不会包含：
+
+- `node_modules`
+- 本地 `config.json`
+- 隧道运行密钥
+- 本机生成的启动器
+- 日志或工作区数据
+
+## 许可证
+
+MIT，见 [`LICENSE`](LICENSE)。

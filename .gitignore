@@ -19,3 +19,6 @@ start-tunnel.local.cmd
 *.local.ps1
 .DS_Store
 Thumbs.db
+
+# Local generated configuration
+config.json
