@@ -75,6 +75,7 @@ $configObject = [ordered]@{
     accessMode = "review"
     maxReadBytes = 200000
     maxOutputBytes = 200000
+    maxSessions = 128
   }
   runtime = [ordered]@{}
   proxy = [ordered]@{

@@ -155,6 +155,11 @@ http://127.0.0.1:3333/healthz
 A raw GET request to `/mcp` may return `No valid MCP session`; that is normal
 until an MCP session has been initialized.
 
+Initialized MCP sessions do not expire merely because a ChatGPT window is idle.
+Memory is bounded with an LRU session cap (`mcp.maxSessions`, default `128`):
+only the least-recently-used sessions are closed when the cap is exceeded. A
+server restart still resets all sessions.
+
 ## Tools
 
 | Group | Tools | Purpose |
@@ -221,7 +226,8 @@ or copied by the user, and ignored by Git.
     "accessMode": "review",
     "denyGlobs": ["**/.env", "**/key.txt"],
     "maxReadBytes": 200000,
-    "maxOutputBytes": 200000
+    "maxOutputBytes": 200000,
+    "maxSessions": 128
   },
   "runtime": {
     "codexRuntimeRoot": "",
@@ -258,6 +264,7 @@ Common environment overrides:
 | Access mode | `CTM_ACCESS_MODE` | `review` |
 | Extra deny rules | `CTM_DENY_GLOBS` | built-in deny list |
 | Read/output caps | `CTM_MAX_READ_BYTES`, `CTM_MAX_OUTPUT_BYTES` | `200000` |
+| MCP session cap | `CTM_MAX_SESSIONS` | `128` |
 | Web tools | `CTM_WEB_TOOLS` | disabled |
 | Search provider | `CTM_SEARCH_PROVIDER`, `CTM_SEARXNG_URL` | `none` |
 | Web limits | `CTM_WEB_MAX_BYTES`, `CTM_WEB_TIMEOUT_MS` | `200000`, `15000` |
@@ -348,16 +355,16 @@ npm test
 npm run check
 ```
 
-The test suite covers configuration precedence, glob matching, secret
-redaction, optional SQLite loading, repository/version consistency, and CI/CD
-gates.
+The test suite covers configuration precedence, session LRU behavior, glob
+matching, secret redaction, optional SQLite loading, repository/version
+consistency, and CI/CD gates.
 
 ## CI and releases
 
 Pull requests run CI on Node.js 20 and 24, smoke-test the HTTP server, parse all
 PowerShell scripts on Windows, and perform a release-package dry run.
 
-Pushing a tag that exactly matches `package.json`, such as `v0.4.8`, triggers
+Pushing a tag that exactly matches `package.json`, such as `v0.4.9`, triggers
 the Release workflow. It verifies that the tagged commit belongs to `main`,
 runs the full checks, builds a ZIP containing source plus compiled `dist`,
 generates `SHA256SUMS.txt`, and creates the GitHub Release.

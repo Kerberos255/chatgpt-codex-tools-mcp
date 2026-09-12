@@ -149,6 +149,7 @@ Set-EnvDefault -Name "CTM_NPM_CACHE" -Value (Get-ConfigProperty $runtimeConfig "
 Set-EnvDefault -Name "CTM_DENY_GLOBS" -Value (Get-ConfigProperty $mcpConfig "denyGlobs")
 Set-EnvDefault -Name "CTM_MAX_READ_BYTES" -Value (Get-ConfigProperty $mcpConfig "maxReadBytes")
 Set-EnvDefault -Name "CTM_MAX_OUTPUT_BYTES" -Value (Get-ConfigProperty $mcpConfig "maxOutputBytes")
+Set-EnvDefault -Name "CTM_MAX_SESSIONS" -Value (Get-ConfigProperty $mcpConfig "maxSessions")
 
 $proxyUrl = Get-ConfigProperty $proxyConfig "url"
 if ($proxyUrl) {

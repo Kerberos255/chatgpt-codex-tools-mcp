@@ -150,6 +150,10 @@ http://127.0.0.1:3333/healthz
 直接 GET `/mcp` 可能返回 `No valid MCP session`；在 MCP 会话尚未初始化时属于
 正常现象。
 
+已初始化的 MCP 会话不会仅因为 ChatGPT 窗口长时间闲置而过期。服务通过 LRU 会话
+上限（`mcp.maxSessions`，默认 `128`）限制内存：只有超过上限时，才关闭最久未使用
+的会话。服务进程重启仍会重置全部会话。
+
 ## 工具目录
 
 | 分组 | 工具 | 用途 |
@@ -212,7 +216,8 @@ CTM_ACCESS_MODE=full
     "accessMode": "review",
     "denyGlobs": ["**/.env", "**/key.txt"],
     "maxReadBytes": 200000,
-    "maxOutputBytes": 200000
+    "maxOutputBytes": 200000,
+    "maxSessions": 128
   },
   "runtime": {
     "codexRuntimeRoot": "",
@@ -249,6 +254,7 @@ CTM_ACCESS_MODE=full
 | 访问模式 | `CTM_ACCESS_MODE` | `review` |
 | 附加拒绝规则 | `CTM_DENY_GLOBS` | 内置规则 |
 | 读取/输出上限 | `CTM_MAX_READ_BYTES`、`CTM_MAX_OUTPUT_BYTES` | `200000` |
+| MCP 会话上限 | `CTM_MAX_SESSIONS` | `128` |
 | Web 工具 | `CTM_WEB_TOOLS` | 关闭 |
 | 搜索后端 | `CTM_SEARCH_PROVIDER`、`CTM_SEARXNG_URL` | `none` |
 | Web 限制 | `CTM_WEB_MAX_BYTES`、`CTM_WEB_TIMEOUT_MS` | `200000`、`15000` |
@@ -336,15 +342,15 @@ npm test
 npm run check
 ```
 
-测试覆盖配置优先级、glob 匹配、敏感值脱敏、可选 SQLite 加载、版本/仓库一致性
-和 CI/CD 闸门。
+测试覆盖配置优先级、会话 LRU 行为、glob 匹配、敏感值脱敏、可选 SQLite 加载、
+版本/仓库一致性和 CI/CD 闸门。
 
 ## CI 与 Release
 
 Pull Request 会在 Node.js 20 和 24 上运行 CI、启动 HTTP 服务做 smoke test、在
 Windows 上解析全部 PowerShell 脚本，并干跑一次 Release 打包。
 
-推送与 `package.json` 完全一致的标签（如 `v0.4.8`）后，会触发 Release 工作流。
+推送与 `package.json` 完全一致的标签（如 `v0.4.9`）后，会触发 Release 工作流。
 它会确认标签提交属于 `main`、重新运行完整检查、构建包含源码和已编译 `dist` 的
 ZIP、生成 `SHA256SUMS.txt`，并自动创建 GitHub Release。
 

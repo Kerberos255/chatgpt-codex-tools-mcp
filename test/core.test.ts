@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { loadConfig, type Config } from "../src/config.js";
 import { createGlobMatcher, splitGlobPatterns } from "../src/globs.js";
 import { redactText, redactValue } from "../src/redaction.js";
+import { SessionRegistry } from "../src/session-registry.js";
 import { sqliteStatus } from "../src/sqlite-tools.js";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -21,6 +22,7 @@ function baseConfig(): Config {
     accessMode: "review",
     maxReadBytes: 200_000,
     maxOutputBytes: 200_000,
+    maxSessions: 128,
     webToolsEnabled: false,
     searchProvider: "none",
     searxngUrl: "",
@@ -40,8 +42,9 @@ test("config file loads and environment variables take precedence", () => {
       mcp: { port: 3334, allowedRoots: [temp], accessMode: "full" },
       web: { enabled: true, searchProvider: "searxng", searxngUrl: "https://example.com" },
     }));
-    const config = loadConfig({ CTM_CONFIG_PATH: configPath, PORT: "4444" });
+    const config = loadConfig({ CTM_CONFIG_PATH: configPath, PORT: "4444", CTM_MAX_SESSIONS: "64" });
     assert.equal(config.port, 4444);
+    assert.equal(config.maxSessions, 64);
     assert.equal(config.accessMode, "full");
     assert.deepEqual(config.allowedRoots, [resolve(temp)]);
     assert.equal(config.webToolsEnabled, true);
@@ -49,6 +52,29 @@ test("config file loads and environment variables take precedence", () => {
   } finally {
     rmSync(temp, { recursive: true, force: true });
   }
+});
+
+test("MCP sessions stay alive while the registry remains under its LRU cap", () => {
+  let now = 0;
+  const closed: string[] = [];
+  const makeSession = (id: string) => ({ close: () => { closed.push(id); } });
+  const sessions = new SessionRegistry(2, () => now);
+
+  sessions.set("a", makeSession("a"));
+  now = 1;
+  sessions.set("b", makeSession("b"));
+
+  now = 10_000_000;
+  assert.ok(sessions.get("a"), "idle time alone must not expire a session");
+
+  now += 1;
+  const evicted = sessions.set("c", makeSession("c"));
+  assert.deepEqual(evicted, ["b"]);
+  assert.deepEqual(closed, ["b"]);
+  assert.equal(sessions.size, 2);
+  assert.ok(sessions.get("a"));
+  assert.equal(sessions.get("b"), undefined);
+  assert.ok(sessions.get("c"));
 });
 
 test("glob matching supports basenames, nested paths, and alternatives", () => {

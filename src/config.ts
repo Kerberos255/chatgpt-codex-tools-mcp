@@ -13,6 +13,7 @@ export interface Config {
   accessMode: AccessMode;
   maxReadBytes: number;
   maxOutputBytes: number;
+  maxSessions: number;
   webToolsEnabled: boolean;
   searchProvider: SearchProvider;
   searxngUrl: string;
@@ -57,6 +58,7 @@ export function loadConfig(env = process.env): Config {
     accessMode: parseAccessMode(firstConfigured(env.CTM_ACCESS_MODE, mcpConfig.accessMode)),
     maxReadBytes: parseInteger(firstConfigured(env.CTM_MAX_READ_BYTES, mcpConfig.maxReadBytes), 200_000, "CTM_MAX_READ_BYTES"),
     maxOutputBytes: parseInteger(firstConfigured(env.CTM_MAX_OUTPUT_BYTES, mcpConfig.maxOutputBytes), 200_000, "CTM_MAX_OUTPUT_BYTES"),
+    maxSessions: parseInteger(firstConfigured(env.CTM_MAX_SESSIONS, mcpConfig.maxSessions), 128, "CTM_MAX_SESSIONS"),
     webToolsEnabled: parseBoolean(firstConfigured(env.CTM_WEB_TOOLS, webConfig.enabled)),
     searchProvider: parseSearchProvider(firstConfigured(env.CTM_SEARCH_PROVIDER, webConfig.searchProvider)),
     searxngUrl: parseString(firstConfigured(env.CTM_SEARXNG_URL, webConfig.searxngUrl), ""),

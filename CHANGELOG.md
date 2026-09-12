@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.4.9 (2026-09-12)
+
+### Fixes
+
+- Removed the 30-minute inactivity expiry for MCP HTTP sessions, so long-idle ChatGPT windows can resume without receiving `Unknown MCP session` solely because of inactivity.
+
+### Improvements
+
+- Added a bounded LRU session registry. Sessions stay alive while the server process remains running, but memory use remains capped by `mcp.maxSessions` / `CTM_MAX_SESSIONS` (default `128`).
+- Added tests for idle-session persistence, LRU eviction, and session-cap configuration.
+- Documented the new session behavior and configuration in both READMEs and the Windows launcher templates.
+
 ## v0.4.8 (2026-07-10)
 
 ### Fixes

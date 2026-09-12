@@ -14,6 +14,7 @@ import { EditStore, type Change, previewChanges, applyChanges } from "./edit-sto
 import { ManagedProcessStore, type ManagedProcessSnapshot } from "./managed-processes.js";
 import { assertProcessAllowed, runProcess, type ProcessResult } from "./process-runner.js";
 import { redactText, redactValue } from "./redaction.js";
+import { SessionRegistry } from "./session-registry.js";
 import {
   sqliteStatus,
   sqliteSchema,
@@ -227,6 +228,7 @@ function createMcpServer(): McpServer {
       toolGroups: TOOL_GROUPS,
       maxReadBytes: config.maxReadBytes,
       maxOutputBytes: config.maxOutputBytes,
+      maxSessions: config.maxSessions,
       webToolsEnabled: config.webToolsEnabled,
       searchProvider: config.searchProvider,
       searxngConfigured: Boolean(config.searxngUrl),
@@ -1240,45 +1242,9 @@ app.use(express.json({ limit: "4mb" }));
 app.use(express.urlencoded({ extended: false }));
 app.get("/healthz", (_req, res) => res.json({ ok: true, name: "chatgpt-codex-tools-mcp" }));
 
-// Session TTL to prevent memory leak from stale MCP sessions (30 min inactivity)
-const SESSION_TTL_MS = 30 * 60 * 1000;
-const sessionMeta = new Map<string, { transport: StreamableHTTPServerTransport; lastUsed: number }>();
-const transports = {
-  get(sessionId: string): StreamableHTTPServerTransport | undefined {
-    const entry = sessionMeta.get(sessionId);
-    if (!entry) return undefined;
-    if (Date.now() - entry.lastUsed > SESSION_TTL_MS) {
-      sessionMeta.delete(sessionId);
-      try { entry.transport.close(); } catch { /* ignore */ }
-      return undefined;
-    }
-    entry.lastUsed = Date.now();
-    return entry.transport;
-  },
-  set(sessionId: string, transport: StreamableHTTPServerTransport): void {
-    sessionMeta.set(sessionId, { transport, lastUsed: Date.now() });
-  },
-  delete(sessionId: string): void {
-    sessionMeta.delete(sessionId);
-  },
-};
-
-// Periodic cleanup of stale sessions (every 5 min)
-const CLEANUP_INTERVAL_MS = 5 * 60 * 1000;
-setInterval(() => {
-  const now = Date.now();
-  let expired = 0;
-  for (const [id, entry] of sessionMeta) {
-    if (now - entry.lastUsed > SESSION_TTL_MS) {
-      try { entry.transport.close(); } catch { /* ignore */ }
-      sessionMeta.delete(id);
-      expired++;
-    }
-  }
-  if (expired > 0) {
-    console.log(`MCP session cleanup: removed ${expired} stale session(s), ${sessionMeta.size} remaining`);
-  }
-}, CLEANUP_INTERVAL_MS);
+// Keep MCP sessions alive across long-idle ChatGPT windows. Memory remains bounded by
+// evicting only the least-recently-used sessions when the configured cap is exceeded.
+const transports = new SessionRegistry<StreamableHTTPServerTransport>(config.maxSessions);
 
 app.all("/mcp", async (req, res) => {
   const sessionId = req.header("mcp-session-id");
@@ -1296,7 +1262,11 @@ app.all("/mcp", async (req, res) => {
       transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: () => randomUUID(),
         onsessioninitialized: (newSessionId) => {
-          if (transport) transports.set(newSessionId, transport);
+          if (!transport) return;
+          const evicted = transports.set(newSessionId, transport);
+          if (evicted.length > 0) {
+            console.log(`MCP session LRU: evicted ${evicted.length} old session(s); cap=${config.maxSessions}`);
+          }
         },
       });
       transport.onclose = () => {
