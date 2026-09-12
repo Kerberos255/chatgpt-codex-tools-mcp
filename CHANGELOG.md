@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.5.0 (2026-09-12)
 
 ### Added
 
@@ -13,6 +13,7 @@
 - `init-windows.cmd` now generates only the selected `start-openai-mcp.cmd` and/or `start-tailscale-mcp.cmd` launchers.
 - Removed the old public `start-all.cmd`, `start-mcp.cmd`, and `start-tunnel.cmd` entry points.
 - Tailscale startup removes the retired experimental HTTPS 10000 / local 3335 MCP route without touching unrelated Funnel routes.
+- Documented the expected foreground console windows for OpenAI and Tailscale startup, including that Tailscale Funnel itself runs through the Tailscale service rather than a separate console.
 
 
 ## v0.4.9 (2026-09-12)

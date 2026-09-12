@@ -102,6 +102,13 @@ start-tailscale-mcp.cmd
 
 Each launcher starts the MCP server when needed, then starts only its own tunnel path. The Tailscale launcher exposes MCP as `HTTPS 443 -> OAuth gateway 3334 -> MCP 3333` and removes the retired experimental `HTTPS 10000 -> 3335` MCP route without changing unrelated Funnel ports.
 
+On a normal cold start, expect two visible console windows:
+
+- OpenAI mode: **Codex MCP Server** + **OpenAI MCP Tunnel**.
+- Tailscale mode: **Codex MCP Server** + **Tailscale OAuth Gateway**.
+
+Tailscale Funnel itself is maintained by the Tailscale service/app and does not open a separate console window. If a required component is already healthy, the launcher reuses it instead of opening a duplicate window. Keep the visible MCP/tunnel or OAuth Gateway windows open while that connection is in use.
+
 ### 4. Configure ChatGPT
 
 For OpenAI Secure MCP Tunnel, configure the connector through the OpenAI tunnel and use **No Authentication** for the local MCP endpoint.
@@ -380,7 +387,7 @@ consistency, and CI/CD gates.
 Pull requests run CI on Node.js 20 and 24, smoke-test the HTTP server, parse all
 PowerShell scripts on Windows, and perform a release-package dry run.
 
-Pushing a tag that exactly matches `package.json`, such as `v0.4.9`, triggers
+Pushing a tag that exactly matches `package.json`, such as `v0.5.0`, triggers
 the Release workflow. It verifies that the tagged commit belongs to `main`,
 runs the full checks, builds a ZIP containing source plus compiled `dist`,
 generates `SHA256SUMS.txt`, and creates the GitHub Release.

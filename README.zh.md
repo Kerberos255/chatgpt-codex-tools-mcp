@@ -98,6 +98,13 @@ start-tailscale-mcp.cmd
 
 每个启动器都会在需要时先启动 MCP，然后只启动自己的隧道链路。Tailscale 入口固定为 `HTTPS 443 → OAuth gateway 3334 → MCP 3333`，并会清理已废弃的实验链路 `HTTPS 10000 → 3335`，不会改动其他 Funnel 端口。
 
+正常冷启动时，通常会看到两个可见控制台窗口：
+
+- OpenAI 模式：**Codex MCP Server** + **OpenAI MCP Tunnel**。
+- Tailscale 模式：**Codex MCP Server** + **Tailscale OAuth Gateway**。
+
+Tailscale Funnel 本身由 Tailscale 服务/客户端维护，不会额外弹出一个 Funnel 控制台窗口。某个必需组件已经健康运行时，启动器会直接复用，不会重复打开同类窗口。使用对应连接期间，请保持可见的 MCP / Tunnel 或 OAuth Gateway 窗口运行。
+
 ### 4. 配置 ChatGPT
 
 OpenAI Secure MCP Tunnel 使用 OpenAI 隧道连接，本地 MCP 端点选择 **No Authentication / 未授权**。
@@ -368,7 +375,7 @@ npm run check
 Pull Request 会在 Node.js 20 和 24 上运行 CI、启动 HTTP 服务做 smoke test、在
 Windows 上解析全部 PowerShell 脚本，并干跑一次 Release 打包。
 
-推送与 `package.json` 完全一致的标签（如 `v0.4.9`）后，会触发 Release 工作流。
+推送与 `package.json` 完全一致的标签（如 `v0.5.0`）后，会触发 Release 工作流。
 它会确认标签提交属于 `main`、重新运行完整检查、构建包含源码和已编译 `dist` 的
 ZIP、生成 `SHA256SUMS.txt`，并自动创建 GitHub Release。
 
