@@ -6,12 +6,17 @@ param(
 $ErrorActionPreference = "Stop"
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $root = Join-Path $projectRoot "tunnel\openai"
-$client = Join-Path $root "tunnel-client.exe"
+$pendingRoot = Join-Path $root "pending-update"
+$pendingClient = Join-Path $pendingRoot "tunnel-client.exe"
+$client = if (Test-Path -LiteralPath $pendingClient) { $pendingClient } else { Join-Path $root "tunnel-client.exe" }
 $profileDir = Join-Path $root "profiles"
 $keyFile = Join-Path $root "control-plane-api-key.txt"
 
 if (-not (Test-Path -LiteralPath $client)) {
   throw "OpenAI tunnel-client is missing. Run init-windows.cmd and choose OpenAI."
+}
+if ($client -eq $pendingClient) {
+  Write-Host "Using staged OpenAI tunnel-client update: $pendingClient"
 }
 if (-not (Test-Path -LiteralPath (Join-Path $profileDir "$Profile.yaml"))) {
   throw "OpenAI tunnel profile is missing. Run init-windows.cmd and choose OpenAI."

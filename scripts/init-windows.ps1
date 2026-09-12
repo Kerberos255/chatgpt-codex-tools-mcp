@@ -62,6 +62,18 @@ function Test-Health([string]$Url) {
   }
 }
 
+function Copy-OpenAITunnelBundle([string]$ClientSource, [string]$Destination) {
+  Copy-Item -LiteralPath $ClientSource -Destination $Destination -Force
+  $sourceDir = Split-Path -Parent $ClientSource
+  $destinationDir = Split-Path -Parent $Destination
+  foreach ($companionName in @("cloudflared.exe", "cloudflared-manifest.json")) {
+    $companionSource = Join-Path $sourceDir $companionName
+    if (Test-Path -LiteralPath $companionSource) {
+      Copy-Item -LiteralPath $companionSource -Destination (Join-Path $destinationDir $companionName) -Force
+    }
+  }
+}
+
 function Download-OpenAITunnelClient([string]$Destination) {
   Write-Step "Download OpenAI tunnel-client"
   $headers = @{ "User-Agent" = "chatgpt-codex-tools-mcp-init"; "Accept" = "application/vnd.github+json" }
@@ -93,7 +105,7 @@ function Download-OpenAITunnelClient([string]$Destination) {
     Expand-Archive -LiteralPath $zipPath -DestinationPath $extract -Force
     $exe = Get-ChildItem -LiteralPath $extract -Recurse -File -Filter "tunnel-client.exe" | Select-Object -First 1
     if (-not $exe) { throw "tunnel-client.exe was not found in the downloaded archive." }
-    Copy-Item -LiteralPath $exe.FullName -Destination $Destination -Force
+    Copy-OpenAITunnelBundle -ClientSource $exe.FullName -Destination $Destination
   } finally {
     Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue
   }
@@ -116,8 +128,8 @@ function Ensure-OpenAITunnel {
       if ($command) { $source = $command.Source }
     }
     if ($source) {
-      Copy-Item -LiteralPath $source -Destination $client -Force
-      Write-Host "Copied existing tunnel-client to $client"
+      Copy-OpenAITunnelBundle -ClientSource $source -Destination $client
+      Write-Host "Copied existing tunnel-client bundle to $client"
     } else {
       Download-OpenAITunnelClient -Destination $client
       Write-Host "Downloaded and verified tunnel-client: $client"
@@ -179,6 +191,7 @@ if errorlevel 1 (
 )
 
 :mcp_ready
+start "OpenAI MCP Tunnel Watchdog" powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\scripts\watch-openai-tunnel.ps1"
 curl.exe -fsS "http://$HealthAddr/readyz" >nul 2>nul
 if not errorlevel 1 (
   echo OpenAI MCP Tunnel is already ready.
@@ -255,10 +268,12 @@ if errorlevel 1 (
   echo Tailscale OAuth Gateway did not become ready.
   exit /b 1
 )
-
 :gateway_ready
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\scripts\configure-tailscale-funnel.ps1"
-exit /b %ERRORLEVEL%
+if errorlevel 1 exit /b %ERRORLEVEL%
+start "Tailscale MCP Watchdog" powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\scripts\watch-tailscale-mcp.ps1"
+exit /b 0
+
 "@
   Set-Content -LiteralPath (Join-Path $projectRoot "start-tailscale-mcp.cmd") -Value $launcher -Encoding ASCII
   Write-Host "Created start-tailscale-mcp.cmd"
