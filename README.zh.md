@@ -96,7 +96,7 @@ Tailscale Funnel：
 start-tailscale-mcp.cmd
 ```
 
-每个启动器都会在需要时先启动 MCP，然后只启动自己的隧道链路。Tailscale 入口固定为 `HTTPS 443 → OAuth gateway 3334 → MCP 3333`，并会清理已废弃的实验链路 `HTTPS 10000 → 3335`，不会改动其他 Funnel 端口。
+每个启动器都会在需要时先启动 MCP，然后只启动自己的隧道链路。Tailscale 入口固定为 `HTTPS 443 → OAuth gateway 3334 → MCP 3333`。
 
 正常冷启动时，通常会看到两个可见控制台窗口：
 

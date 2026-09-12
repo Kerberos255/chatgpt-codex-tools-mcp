@@ -27,6 +27,35 @@ function Find-NodeExe {
   return $candidates | Where-Object { $_ -and (Test-Path -LiteralPath $_) } | Select-Object -First 1
 }
 
+function Invoke-TailscaleBestEffort {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string[]]$Arguments,
+    [switch]$Quiet
+  )
+
+  $previousErrorActionPreference = $ErrorActionPreference
+  $nativePreferenceVariable = Get-Variable -Name PSNativeCommandUseErrorActionPreference -ErrorAction SilentlyContinue
+  $previousNativePreference = if ($nativePreferenceVariable) { $PSNativeCommandUseErrorActionPreference } else { $null }
+  try {
+    $ErrorActionPreference = "Continue"
+    if ($nativePreferenceVariable) { $PSNativeCommandUseErrorActionPreference = $false }
+    if ($Quiet) {
+      & $tailscale @Arguments 2>$null | Out-Null
+    } else {
+      & $tailscale @Arguments
+    }
+    if (-not $Quiet -and $LASTEXITCODE -ne 0) {
+      Write-Warning "Tailscale command failed with exit $LASTEXITCODE: tailscale $($Arguments -join ' ')"
+    }
+  } catch {
+    if (-not $Quiet) { Write-Warning "Tailscale command failed: $($_.Exception.Message)" }
+  } finally {
+    if ($nativePreferenceVariable) { $PSNativeCommandUseErrorActionPreference = $previousNativePreference }
+    $ErrorActionPreference = $previousErrorActionPreference
+  }
+}
+
 $tailscale = Find-TailscaleExe
 if (-not $tailscale) { throw "Tailscale is not installed. Run init-windows.cmd and choose Tailscale." }
 $node = Find-NodeExe
@@ -34,10 +63,9 @@ if (-not $node) { throw "Node.js was not found." }
 $status = (& $node (Join-Path $projectRoot "scripts\check-tailscale.mjs") | ConvertFrom-Json)
 if (-not $status.running) { throw "Tailscale is not connected." }
 
-# Remove only the retired experimental MCP route. Other Funnel routes, including OpenClaw on 8443, are left unchanged.
-& $tailscale funnel --tls-terminated-tcp=10000 off 2>$null | Out-Null
-
 & $tailscale funnel --bg --yes --tls-terminated-tcp=443 tcp://127.0.0.1:3334
 if ($LASTEXITCODE -ne 0) { throw "Failed to configure Tailscale Funnel on HTTPS 443." }
 Write-Host "Tailscale MCP Funnel is ready: HTTPS 443 -> OAuth gateway 3334 -> MCP 3333"
-& $tailscale funnel status
+
+# Status is informational. A display/query failure must not turn a successful 443 setup into a startup failure.
+Invoke-TailscaleBestEffort -Arguments @("funnel", "status")

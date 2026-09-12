@@ -100,7 +100,7 @@ For Tailscale Funnel:
 start-tailscale-mcp.cmd
 ```
 
-Each launcher starts the MCP server when needed, then starts only its own tunnel path. The Tailscale launcher exposes MCP as `HTTPS 443 -> OAuth gateway 3334 -> MCP 3333` and removes the retired experimental `HTTPS 10000 -> 3335` MCP route without changing unrelated Funnel ports.
+Each launcher starts the MCP server when needed, then starts only its own tunnel path. The Tailscale launcher exposes MCP as `HTTPS 443 -> OAuth gateway 3334 -> MCP 3333`.
 
 On a normal cold start, expect two visible console windows:
 

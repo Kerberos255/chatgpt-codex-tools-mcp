@@ -134,6 +134,7 @@ test("repository metadata and public configuration stay synchronized", () => {
 test("Windows tunnel bootstrap keeps public entry points minimal", () => {
   const gitignore = readFileSync(join(repoRoot, ".gitignore"), "utf8");
   const initializer = readFileSync(join(repoRoot, "scripts", "init-windows.ps1"), "utf8");
+  const funnelConfigurator = readFileSync(join(repoRoot, "scripts", "configure-tailscale-funnel.ps1"), "utf8");
   const releaseBuilder = readFileSync(join(repoRoot, "scripts", "build-release.ps1"), "utf8");
   const tailscaleGateway = readFileSync(join(repoRoot, "src", "tailscale-gateway.ts"), "utf8");
 
@@ -143,6 +144,10 @@ test("Windows tunnel bootstrap keeps public entry points minimal", () => {
   assert.equal(initializer.includes('[ValidateSet("OpenAI", "Tailscale", "Both")]'), true);
   assert.equal(initializer.includes("SHA256SUMS.txt"), true);
   assert.equal(initializer.includes("Existing config.json kept unchanged"), true);
+  assert.equal(funnelConfigurator.includes("Invoke-TailscaleBestEffort"), true);
+  assert.equal(funnelConfigurator.includes("10000"), false);
+  assert.equal(funnelConfigurator.includes('& $tailscale funnel --bg --yes --tls-terminated-tcp=443 tcp://127.0.0.1:3334'), true);
+  assert.equal(funnelConfigurator.includes('Invoke-TailscaleBestEffort -Arguments @(\"funnel\", \"status\")'), true);
   assert.equal(tailscaleGateway.includes("tunnel/tailscale/owner-password.txt"), true);
   for (const retired of ["start-all.cmd", "start-mcp.cmd", "start-tunnel.cmd"]) {
     assert.equal(releaseBuilder.includes(`\"${retired}\"`), false);
