@@ -23,14 +23,14 @@ ChatGPT 负责推理；本服务负责限定工作区的文件读取、搜索、
 - 工具输出尽力进行敏感值脱敏
 - 可选 SearXNG 搜索和公共 HTTP 抓取，默认关闭
 - 可选白名单 SQLite 读取和受限结构化写入，默认关闭
-- Windows 初始化器，以及 MCP/私有隧道启动脚本
+- Windows 初始化器，可配置 OpenAI Secure MCP Tunnel、Tailscale Funnel 或两者
 
 ## 环境要求
 
 - 核心服务需要 Node.js 20 或更高版本；推荐 Node.js 24
 - npm
-- 支持 Secure MCP Tunnel 的 ChatGPT 自定义连接器
-- ChatGPT 需要访问本机端点时，使用 OpenAI `tunnel-client`
+- ChatGPT 自定义连接器
+- OpenAI Secure MCP Tunnel 路径使用 OpenAI `tunnel-client`；Funnel 路径使用 Tailscale
 - SQLite 工具需要支持 `node:sqlite` 的运行时（Node.js 22.5+；推荐 24+）
 
 Windows 下，`scripts/start-mcp.ps1` 按以下顺序寻找 Node：
@@ -62,43 +62,55 @@ init-windows.cmd
 
 - 询问较窄的允许工作区根路径，例如 `D:\Projects`
 - 安装 npm 依赖并构建 `dist/server.js`
-- 定位本机 `tunnel-client.exe`
-- 创建被 Git 忽略的本地 `config.json`
-- 创建仅供本机使用的 MCP 和隧道启动器
+- 让你选择 **OpenAI Secure MCP Tunnel**、**Tailscale Funnel** 或 **两者都配置**
+- 首次配置时创建被 Git 忽略的本地 `config.json`；已有配置默认保留，除非显式强制覆盖
+- 按选择创建 `tunnel\openai` 和/或 `tunnel\tailscale`，集中保存隧道程序、profile 和本地状态
+- 优先复用现有隧道程序；缺少时从对应官方分发源下载
+- OpenAI `tunnel-client` 下载后会用 Release 的 `SHA256SUMS.txt` 校验
+- 只生成你实际配置的一个或两个一键启动脚本
 
-生成的本地文件包括：
+按你的选择，项目根目录会出现：
 
 ```text
-config.json
-start-mcp.local.cmd
-start-tunnel.local.cmd
-start-tunnel.local.ps1
+start-openai-mcp.cmd
+start-tailscale-mcp.cmd
 ```
 
-初始化器不会保存 `CONTROL_PLANE_API_KEY`。隧道启动器从当前环境读取，或通过
-隐藏输入框临时询问。
+以后可以再次运行 `init-windows.cmd` 配置另一种隧道；已有启动脚本会保留，所以两种入口可以同时存在。
+
+OpenAI 相关本地文件放在 `tunnel\openai`。启动时依次读取环境变量 `CONTROL_PLANE_API_KEY`、可选的 `tunnel\openai\control-plane-api-key.txt`，都没有时再用隐藏输入临时询问。
+
+Tailscale 相关本地文件放在 `tunnel\tailscale`。初始化器会创建 OAuth 审批页使用的 `owner-password.txt`，OAuth 状态也保存在同一目录。
 
 ### 3. 启动 MCP 与隧道
 
-运行：
+OpenAI Secure MCP Tunnel：
 
 ```text
-start-all.cmd
+start-openai-mcp.cmd
 ```
 
-使用 ChatGPT 连接器期间，请保持打开的两个窗口运行。
-
-也可以单独启动：
+Tailscale Funnel：
 
 ```text
-start-mcp.cmd       # 仅本地 MCP 服务
-start-tunnel.cmd    # 仅私有隧道，需先初始化
+start-tailscale-mcp.cmd
 ```
+
+每个启动器都会在需要时先启动 MCP，然后只启动自己的隧道链路。Tailscale 入口固定为 `HTTPS 443 → OAuth gateway 3334 → MCP 3333`，并会清理已废弃的实验链路 `HTTPS 10000 → 3335`，不会改动其他 Funnel 端口。
 
 ### 4. 配置 ChatGPT
 
-创建使用私有隧道的自定义连接器，并选择 **No Authentication / 未授权**。
-本地服务本身应继续绑定 `127.0.0.1`。
+OpenAI Secure MCP Tunnel 使用 OpenAI 隧道连接，本地 MCP 端点选择 **No Authentication / 未授权**。
+
+Tailscale Funnel 使用：
+
+```text
+https://<你的机器名>.<你的tailnet>.ts.net/mcp
+```
+
+使用 OAuth 自动发现。打开授权页后，输入本机 `tunnel\tailscale\owner-password.txt` 中的 Owner Password。
+
+两种模式下 MCP 服务本身都继续只绑定 `127.0.0.1`。
 
 ## 手动安装（Windows、macOS、Linux）
 
@@ -132,13 +144,18 @@ npm start
 
 ## 连接路径
 
+OpenAI 路径：
+
 ```text
-ChatGPT 自定义连接器
-  → 私有 Secure MCP Tunnel
-  → 本机 tunnel-client
-  → http://127.0.0.1:3333/mcp
-  → chatgpt-codex-tools-mcp
-  → 仅允许的本地工作区
+ChatGPT → OpenAI Secure MCP Tunnel → tunnel\openai\tunnel-client.exe
+        → http://127.0.0.1:3333/mcp → 仅允许的本地工作区
+```
+
+Tailscale 路径：
+
+```text
+ChatGPT → Tailscale Funnel HTTPS 443 → OAuth gateway 127.0.0.1:3334
+        → MCP 127.0.0.1:3333 → 仅允许的本地工作区
 ```
 
 健康检查：
@@ -265,8 +282,9 @@ CTM_ACCESS_MODE=full
 
 高级运行时和代理选项见 `env.example`。
 
-不要把隧道运行密钥写入 `config.json`。`CONTROL_PLANE_API_KEY` 应放在当前环境或
-其他私有本地机制中。
+不要把隧道运行密钥写入 `config.json`。OpenAI Tunnel 的
+`CONTROL_PLANE_API_KEY` 应放在当前环境，或 Git 已忽略的本地
+`tunnel\openai\control-plane-api-key.txt`。
 
 ## 可选 Web 工具
 
@@ -382,10 +400,11 @@ npm ci
 npm run build
 ```
 
-### 缺少 tunnel-client
+### 缺少隧道程序
 
-从 OpenAI Platform 隧道设置下载 `tunnel-client`，放到 `init-windows.cmd` 显示的
-路径，再重新初始化。
+重新运行 `init-windows.cmd` 并选择对应隧道。初始化器会优先复用已安装的程序；
+缺少时，OpenAI `tunnel-client` 会从官方 GitHub Release 下载并校验 SHA256，
+Tailscale 则从官方稳定版地址下载 Windows 安装器。
 
 ## 仓库边界
 
@@ -393,8 +412,8 @@ npm run build
 
 - `node_modules`
 - 本地 `config.json`
-- 隧道运行密钥
-- 本机生成的启动器
+- 本地 `tunnel/` 目录（程序、profile、OAuth 状态和运行密钥）
+- 本机生成的 `start-openai-mcp.cmd` / `start-tailscale-mcp.cmd`
 - 日志或工作区数据
 
 ## 许可证

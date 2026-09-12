@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Windows initializer can configure OpenAI Secure MCP Tunnel, Tailscale Funnel, or both.
+- Tunnel-specific local state now lives under `tunnel/openai` and `tunnel/tailscale`.
+- Tailscale OAuth gateway support is included in the public project; the one-click launcher exposes MCP on Funnel HTTPS 443.
+
+### Changed
+
+- `init-windows.cmd` now generates only the selected `start-openai-mcp.cmd` and/or `start-tailscale-mcp.cmd` launchers.
+- Removed the old public `start-all.cmd`, `start-mcp.cmd`, and `start-tunnel.cmd` entry points.
+- Tailscale startup removes the retired experimental HTTPS 10000 / local 3335 MCP route without touching unrelated Funnel routes.
+
+
 ## v0.4.9 (2026-09-12)
 
 ### Fixes

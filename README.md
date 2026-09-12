@@ -26,14 +26,14 @@ execution without a shell, and optional web and SQLite tools.
 - Best-effort secret redaction on tool output
 - Optional SearXNG search and public HTTP fetch, disabled by default
 - Optional allowlisted SQLite reads and bounded structured writes, disabled by default
-- Windows initializer and launchers for the MCP server and private tunnel
+- Windows initializer for OpenAI Secure MCP Tunnel, Tailscale Funnel, or both
 
 ## Requirements
 
 - Node.js 20 or newer for the core server; Node.js 24 is recommended
 - npm
-- A ChatGPT custom connector with Secure MCP Tunnel support
-- OpenAI `tunnel-client` when ChatGPT must reach this local endpoint
+- A ChatGPT custom connector
+- OpenAI `tunnel-client` for the OpenAI Secure MCP Tunnel path, or Tailscale for the Funnel path
 - SQLite tools require a runtime with `node:sqlite` support (Node.js 22.5+;
   Node.js 24+ recommended)
 
@@ -66,44 +66,55 @@ The initializer:
 
 - asks for narrow allowed workspace roots, such as `D:\Projects`
 - installs npm dependencies and builds `dist/server.js`
-- locates your local `tunnel-client.exe`
-- creates an ignored local `config.json`
-- creates local-only MCP and tunnel launchers
+- lets you choose **OpenAI Secure MCP Tunnel**, **Tailscale Funnel**, or **Both**
+- creates an ignored local `config.json` on first setup and preserves an existing one unless explicitly forced
+- creates `tunnel\openai` and/or `tunnel\tailscale` for tunnel-specific binaries, profiles, and local state
+- reuses an existing tunnel runtime when possible; otherwise downloads the selected runtime from its official distribution source
+- verifies the downloaded OpenAI `tunnel-client` ZIP against the release `SHA256SUMS.txt`
+- generates only the selected one-click launcher(s)
 
-Generated local files include:
-
-```text
-config.json
-start-mcp.local.cmd
-start-tunnel.local.cmd
-start-tunnel.local.ps1
-```
-
-`CONTROL_PLANE_API_KEY` is not stored. The tunnel launcher reads it from the
-current environment or asks for it using a hidden prompt.
-
-### 3. Start MCP and tunnel
-
-Run:
+Depending on your selection, the project root gains:
 
 ```text
-start-all.cmd
+start-openai-mcp.cmd
+start-tailscale-mcp.cmd
 ```
 
-Keep both opened windows running while the ChatGPT connector is in use.
+You can run `init-windows.cmd` again later and configure the other tunnel too; the existing launcher is kept, so both can coexist.
 
-Single-purpose launchers are also available:
+OpenAI-specific local files live under `tunnel\openai`. The launcher reads `CONTROL_PLANE_API_KEY` from the environment, then `tunnel\openai\control-plane-api-key.txt` when present, or asks for it with a hidden prompt.
+
+Tailscale-specific local files live under `tunnel\tailscale`. The initializer creates `owner-password.txt` for the local OAuth approval page and keeps OAuth state in the same directory.
+
+### 3. Start MCP and your tunnel
+
+For OpenAI Secure MCP Tunnel:
 
 ```text
-start-mcp.cmd       # local MCP server only
-start-tunnel.cmd    # private tunnel only, after initialization
+start-openai-mcp.cmd
 ```
+
+For Tailscale Funnel:
+
+```text
+start-tailscale-mcp.cmd
+```
+
+Each launcher starts the MCP server when needed, then starts only its own tunnel path. The Tailscale launcher exposes MCP as `HTTPS 443 -> OAuth gateway 3334 -> MCP 3333` and removes the retired experimental `HTTPS 10000 -> 3335` MCP route without changing unrelated Funnel ports.
 
 ### 4. Configure ChatGPT
 
-Create a custom connector that uses the private tunnel and choose
-**No Authentication**. The local server itself should remain bound to
-`127.0.0.1`.
+For OpenAI Secure MCP Tunnel, configure the connector through the OpenAI tunnel and use **No Authentication** for the local MCP endpoint.
+
+For Tailscale Funnel, use:
+
+```text
+https://<your-machine>.<your-tailnet>.ts.net/mcp
+```
+
+Use OAuth discovery. When the approval page opens, enter the local Owner Password from `tunnel\tailscale\owner-password.txt`.
+
+The MCP server itself remains bound to `127.0.0.1` in both modes.
 
 ## Manual installation (Windows, macOS, Linux)
 
@@ -137,13 +148,18 @@ Environment variables and explicit PowerShell parameters override
 
 ## Connection path
 
+OpenAI path:
+
 ```text
-ChatGPT custom connector
-  -> private Secure MCP Tunnel
-  -> tunnel-client on your machine
-  -> http://127.0.0.1:3333/mcp
-  -> chatgpt-codex-tools-mcp
-  -> allowed local workspaces only
+ChatGPT -> OpenAI Secure MCP Tunnel -> tunnel\openai\tunnel-client.exe
+        -> http://127.0.0.1:3333/mcp -> allowed local workspaces
+```
+
+Tailscale path:
+
+```text
+ChatGPT -> Tailscale Funnel HTTPS 443 -> OAuth gateway 127.0.0.1:3334
+        -> MCP 127.0.0.1:3333 -> allowed local workspaces
 ```
 
 Health endpoint:
@@ -275,9 +291,9 @@ Common environment overrides:
 
 See `env.example` for advanced runtime and proxy overrides.
 
-Do not put tunnel runtime keys in `config.json`. Keep
-`CONTROL_PLANE_API_KEY` in the current environment or another private local
-mechanism.
+Do not put tunnel runtime keys in `config.json`. For OpenAI Tunnel, keep
+`CONTROL_PLANE_API_KEY` in the current environment or the Git-ignored local
+`tunnel\openai\control-plane-api-key.txt` file.
 
 ## Optional web tools
 
@@ -399,10 +415,12 @@ npm ci
 npm run build
 ```
 
-### Tunnel client is missing
+### Tunnel runtime is missing
 
-Download `tunnel-client` from OpenAI Platform tunnel settings, place it at the
-path shown by `init-windows.cmd`, and rerun initialization.
+Rerun `init-windows.cmd` and select the affected tunnel. The initializer reuses
+an installed runtime when possible. Otherwise it downloads OpenAI
+`tunnel-client` from the official GitHub Release and verifies its SHA256, or
+downloads the current stable Tailscale Windows installer from Tailscale.
 
 ## Repository boundaries
 
@@ -410,8 +428,8 @@ The repository and Release package do not include:
 
 - `node_modules`
 - local `config.json`
-- tunnel runtime keys
-- generated local launchers
+- the local `tunnel/` directory (binaries, profiles, OAuth state, and runtime keys)
+- generated `start-openai-mcp.cmd` / `start-tailscale-mcp.cmd` launchers
 - logs or workspace data
 
 ## License

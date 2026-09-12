@@ -51,9 +51,6 @@ try {
     "README.md",
     "README.zh.md",
     "SECURITY.md",
-    "start-all.cmd",
-    "start-mcp.cmd",
-    "start-tunnel.cmd",
     "tsconfig.json"
   )
 

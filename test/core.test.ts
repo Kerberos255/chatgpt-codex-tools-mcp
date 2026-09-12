@@ -131,6 +131,24 @@ test("repository metadata and public configuration stay synchronized", () => {
   assert.doesNotThrow(() => JSON.parse(readFileSync(join(repoRoot, "config.example.json"), "utf8")));
 });
 
+test("Windows tunnel bootstrap keeps public entry points minimal", () => {
+  const gitignore = readFileSync(join(repoRoot, ".gitignore"), "utf8");
+  const initializer = readFileSync(join(repoRoot, "scripts", "init-windows.ps1"), "utf8");
+  const releaseBuilder = readFileSync(join(repoRoot, "scripts", "build-release.ps1"), "utf8");
+  const tailscaleGateway = readFileSync(join(repoRoot, "src", "tailscale-gateway.ts"), "utf8");
+
+  assert.equal(gitignore.split(/\r?\n/).includes("/tunnel/"), true);
+  assert.equal(gitignore.split(/\r?\n/).includes("start-openai-mcp.cmd"), true);
+  assert.equal(gitignore.split(/\r?\n/).includes("start-tailscale-mcp.cmd"), true);
+  assert.equal(initializer.includes('[ValidateSet("OpenAI", "Tailscale", "Both")]'), true);
+  assert.equal(initializer.includes("SHA256SUMS.txt"), true);
+  assert.equal(initializer.includes("Existing config.json kept unchanged"), true);
+  assert.equal(tailscaleGateway.includes("tunnel/tailscale/owner-password.txt"), true);
+  for (const retired of ["start-all.cmd", "start-mcp.cmd", "start-tunnel.cmd"]) {
+    assert.equal(releaseBuilder.includes(`\"${retired}\"`), false);
+  }
+});
+
 test("CI and release workflows include validation and package gates", () => {
   const ci = readFileSync(join(repoRoot, ".github", "workflows", "ci.yml"), "utf8");
   const release = readFileSync(join(repoRoot, ".github", "workflows", "release.yml"), "utf8");

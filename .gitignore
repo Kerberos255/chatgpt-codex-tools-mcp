@@ -22,3 +22,10 @@ Thumbs.db
 
 # Local generated configuration
 config.json
+
+# Local tunnel runtimes, profiles, OAuth state, and generated one-click launchers
+/tunnel/
+start-openai-mcp.cmd
+start-tailscale-mcp.cmd
+.tailscale-owner-token
+.tailscale-oauth-token-state*.json
