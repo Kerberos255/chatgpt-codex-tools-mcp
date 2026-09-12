@@ -158,5 +158,8 @@ test("CI and release workflows include validation and package gates", () => {
   assert.equal(release.includes("merge-base --is-ancestor"), true);
   assert.equal(release.includes("package version"), true);
   assert.equal(release.includes("build-release.ps1"), true);
+  const publishJob = release.split("  publish:")[1] ?? "";
+  assert.equal(publishJob.includes("actions/checkout@v7"), true);
+  assert.equal(publishJob.includes("actions/download-artifact@v8"), true);
   assert.equal(builder.includes("SHA256SUMS.txt"), true);
 });
