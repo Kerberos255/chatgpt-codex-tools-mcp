@@ -2,6 +2,10 @@
 
 ## v0.6.0 (2026-09-13)
 
+### Fixes
+
+- Fixed a PowerShell parser error in `configure-tailscale-funnel.ps1` by bracing `${LASTEXITCODE}` before a colon in the warning message.
+
 ### Breaking changes
 
 - Consolidated the exposed MCP surface into nine tools: `local_status`, `open_workspace`, `files`, `git`, `edit`, `exec`, `sqlite`, `web`, and `screenshot`.

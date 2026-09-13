@@ -150,6 +150,8 @@ test("Windows tunnel bootstrap keeps public entry points minimal", () => {
   assert.equal(initializer.includes('"cloudflared.exe", "cloudflared-manifest.json"'), true);
   assert.equal(initializer.includes("Existing config.json kept unchanged"), true);
   assert.equal(funnelConfigurator.includes("Invoke-TailscaleBestEffort"), true);
+  assert.equal(funnelConfigurator.includes('${LASTEXITCODE}: tailscale'), true);
+  assert.equal(funnelConfigurator.includes('$LASTEXITCODE: tailscale'), false);
   assert.equal(funnelConfigurator.includes("10000"), false);
   assert.equal(funnelConfigurator.includes('& $tailscale funnel --bg --yes --tls-terminated-tcp=443 tcp://127.0.0.1:3334'), true);
   assert.equal(funnelConfigurator.includes('Invoke-TailscaleBestEffort -Arguments @(\"funnel\", \"status\")'), true);

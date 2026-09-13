@@ -46,7 +46,7 @@ function Invoke-TailscaleBestEffort {
       & $tailscale @Arguments
     }
     if (-not $Quiet -and $LASTEXITCODE -ne 0) {
-      Write-Warning "Tailscale command failed with exit $LASTEXITCODE: tailscale $($Arguments -join ' ')"
+      Write-Warning "Tailscale command failed with exit ${LASTEXITCODE}: tailscale $($Arguments -join ' ')"
     }
   } catch {
     if (-not $Quiet) { Write-Warning "Tailscale command failed: $($_.Exception.Message)" }
