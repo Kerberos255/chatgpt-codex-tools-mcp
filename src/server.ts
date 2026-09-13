@@ -132,6 +132,114 @@ const sqliteChangeSchema = z.discriminatedUnion("type", [
   }),
 ]);
 
+const localStatusOutputSchema = z.object({
+  result: z.string(),
+  ok: z.boolean(),
+  name: z.string(),
+  version: z.string(),
+  accessMode: z.string(),
+  allowedRoots: z.array(z.string()),
+  toolGroups: z.array(z.object({ type: z.string(), tools: z.array(z.string()) })),
+  maxReadBytes: z.number(),
+  maxOutputBytes: z.number(),
+  maxSessions: z.number(),
+  webToolsEnabled: z.boolean(),
+  searchProvider: z.string(),
+  searxngConfigured: z.boolean(),
+  webMaxBytes: z.number(),
+  webTimeoutMs: z.number(),
+  sqliteToolsEnabled: z.boolean(),
+  sqliteAllowedDbs: z.array(z.string()),
+  sqliteMaxRows: z.number(),
+});
+
+const filesOutputSchema = z.object({
+  result: z.string(),
+  action: z.enum(["list", "read", "search", "find"]),
+  path: z.string(),
+  recursive: z.boolean().optional(),
+  depth: z.number().int().optional(),
+  truncated: z.boolean().optional(),
+});
+
+const processResultOutputSchema = z.object({
+  result: z.string(),
+  stdout: z.string(),
+  stderr: z.string(),
+  exitCode: z.number().nullable(),
+  timedOut: z.boolean(),
+});
+
+const gitOutputSchema = processResultOutputSchema.extend({
+  staged: z.boolean().optional(),
+  path: z.string().optional(),
+  statOnly: z.boolean().optional(),
+});
+
+const editOutputSchema = z.object({
+  result: z.string(),
+  action_id: z.string(),
+  requires_approval: z.boolean().optional(),
+  changes: z.array(z.object({
+    path: z.string(),
+    type: z.enum(["replace_text", "replace_range", "insert_before", "insert_after", "append", "create", "overwrite", "rename", "delete"]),
+    diff: z.string(),
+  })).optional(),
+  applied: z.boolean().optional(),
+  changeCount: z.number().int().optional(),
+});
+
+const execOutputSchema = processResultOutputSchema.extend({
+  process_id: z.string().optional(),
+  command: z.string().optional(),
+  args: z.array(z.string()).optional(),
+  cwd: z.string().optional(),
+  running: z.boolean().optional(),
+  startedAt: z.number().optional(),
+  finishedAt: z.number().optional(),
+});
+
+const sqliteRowSchema = z.record(z.string(), z.unknown());
+const sqliteOutputSchema = z.object({
+  result: z.string(),
+  rows: z.array(sqliteRowSchema).optional(),
+  action_id: z.string().optional(),
+  requires_approval: z.boolean().optional(),
+  beforeRows: z.array(sqliteRowSchema).optional(),
+  diff: z.string().optional(),
+  applied: z.boolean().optional(),
+  change_type: z.enum(["insert", "update", "delete"]).optional(),
+  table: z.string().optional(),
+});
+
+const webSearchResultSchema = z.object({
+  title: z.string(),
+  url: z.string(),
+  snippet: z.string(),
+  engine: z.string().optional(),
+});
+const webOutputSchema = z.object({
+  result: z.string(),
+  results: z.array(webSearchResultSchema).optional(),
+  finalUrl: z.string().optional(),
+  status: z.number().int().optional(),
+  contentType: z.string().optional(),
+  title: z.string().optional(),
+  text: z.string().optional(),
+  truncated: z.boolean().optional(),
+});
+
+const screenshotOutputSchema = z.object({
+  result: z.string(),
+  mode: z.enum(["desktop", "monitor", "window", "region"]),
+  width: z.number().int(),
+  height: z.number().int(),
+  left: z.number().int(),
+  top: z.number().int(),
+  windowTitle: z.string().optional(),
+  savedPath: z.string().optional(),
+});
+
 function byteLength(value: string): number {
   return Buffer.byteLength(value, "utf8");
 }
@@ -216,27 +324,30 @@ function createMcpServer(): McpServer {
       description: "Server status, access mode, allowed roots, caps, and optional feature config. Call once to discover what's available.",
       inputSchema: {},
       annotations: { readOnlyHint: true },
-      outputSchema: z.object({ result: z.string() }),
+      outputSchema: localStatusOutputSchema,
     },
-    async () => textResult(JSON.stringify({
-      ok: true,
-      name: "chatgpt-codex-tools-mcp",
-      version: SERVER_VERSION,
-      accessMode: config.accessMode,
-      allowedRoots: config.allowedRoots,
-      toolGroups: TOOL_GROUPS,
-      maxReadBytes: config.maxReadBytes,
-      maxOutputBytes: config.maxOutputBytes,
-      maxSessions: config.maxSessions,
-      webToolsEnabled: config.webToolsEnabled,
-      searchProvider: config.searchProvider,
-      searxngConfigured: Boolean(config.searxngUrl),
-      webMaxBytes: config.webMaxBytes,
-      webTimeoutMs: config.webTimeoutMs,
-      sqliteToolsEnabled: config.sqliteToolsEnabled,
-      sqliteAllowedDbs: config.sqliteAllowedDbs,
-      sqliteMaxRows: config.sqliteMaxRows,
-    }, null, 2)),
+    async () => {
+      const status = {
+        ok: true,
+        name: "chatgpt-codex-tools-mcp",
+        version: SERVER_VERSION,
+        accessMode: config.accessMode,
+        allowedRoots: config.allowedRoots,
+        toolGroups: TOOL_GROUPS,
+        maxReadBytes: config.maxReadBytes,
+        maxOutputBytes: config.maxOutputBytes,
+        maxSessions: config.maxSessions,
+        webToolsEnabled: config.webToolsEnabled,
+        searchProvider: config.searchProvider,
+        searxngConfigured: Boolean(config.searxngUrl),
+        webMaxBytes: config.webMaxBytes,
+        webTimeoutMs: config.webTimeoutMs,
+        sqliteToolsEnabled: config.sqliteToolsEnabled,
+        sqliteAllowedDbs: config.sqliteAllowedDbs,
+        sqliteMaxRows: config.sqliteMaxRows,
+      };
+      return textResult(JSON.stringify(status, null, 2), status);
+    },
   );
 
   // ============================================================
@@ -286,6 +397,7 @@ function createMcpServer(): McpServer {
         exclude: z.string().optional().describe("For search, exclude matching glob paths."),
       },
       annotations: { readOnlyHint: true },
+      outputSchema: filesOutputSchema,
     },
     async ({ action, workspaceId, path, recursive, depth, pattern, caseSensitive, contextLines, maxMatches, maxResults, include, exclude }) => {
       const { workspace, absolutePath } = workspaces.resolve(workspaceId, path);
@@ -353,6 +465,7 @@ function createMcpServer(): McpServer {
         maxBytes: z.number().int().positive().max(config.maxOutputBytes).default(config.maxOutputBytes),
       },
       annotations: { readOnlyHint: true },
+      outputSchema: gitOutputSchema,
     },
     async ({ action, workspaceId, staged, path, statOnly, maxBytes }) => {
       if (action === "status") return gitTool(workspaceId, ["status", "--short"]);
@@ -376,6 +489,7 @@ function createMcpServer(): McpServer {
         actionId: z.string().optional().describe("Required for confirm."),
       },
       annotations: { readOnlyHint: false, destructiveHint: false },
+      outputSchema: editOutputSchema,
     },
     async ({ action, workspaceId, changes, actionId }) => {
       if (action === "preview") {
@@ -427,6 +541,7 @@ function createMcpServer(): McpServer {
         processId: z.string().optional().describe("Required for read/stop."),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+      outputSchema: execOutputSchema,
     },
     async ({ action, workspaceId, command, args, workingDirectory, timeoutSeconds, maxBytes, processId }) => {
       if (action === "read" || action === "stop") {
@@ -479,6 +594,7 @@ function createMcpServer(): McpServer {
         actionId: z.string().optional().describe("Required for confirm."),
       },
       annotations: { readOnlyHint: false, destructiveHint: false },
+      outputSchema: sqliteOutputSchema,
     },
     async ({ action, dbPath, sql, params, limit, change, actionId }) => {
       if (!config.sqliteToolsEnabled) throw new Error("SQLite tools are disabled. Enable sqlite in config.json or CTM_SQLITE_TOOLS=1.");
@@ -524,6 +640,7 @@ function createMcpServer(): McpServer {
         url: z.string().url().optional().describe("Required for fetch."),
       },
       annotations: { readOnlyHint: true, openWorldHint: true },
+      outputSchema: webOutputSchema,
     },
     async ({ action, query, limit, url }) => {
       if (!config.webToolsEnabled) throw new Error("Web tools are disabled. Enable web in config.json or CTM_WEB_TOOLS=1.");
@@ -572,6 +689,7 @@ function createMcpServer(): McpServer {
         savePath: z.string().optional().describe("Optional workspace-relative PNG path. Omit to avoid writing a file."),
       },
       annotations: { readOnlyHint: false, destructiveHint: false },
+      outputSchema: screenshotOutputSchema,
     },
     async ({ mode, workspaceId, monitor, windowTitle, windowHandle, x, y, width, height, savePath }) => {
       let absoluteSavePath: string | undefined;
@@ -709,22 +827,7 @@ function textResult(text: string, structuredContent: object = {}) {
   };
 }
 
-function managedProcessOutputSchema() {
-  return z.object({
-    result: z.string(),
-    process_id: z.string(),
-    command: z.string(),
-    args: z.array(z.string()),
-    cwd: z.string(),
-    running: z.boolean(),
-    startedAt: z.number(),
-    finishedAt: z.number().optional(),
-    stdout: z.string(),
-    stderr: z.string(),
-    exitCode: z.number().nullable(),
-    timedOut: z.boolean(),
-  });
-}
+
 
 function managedProcessResult(snapshot: ManagedProcessSnapshot) {
   return textResult(

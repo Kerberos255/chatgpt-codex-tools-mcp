@@ -2,6 +2,10 @@
 
 ## v0.6.0 (2026-09-13)
 
+### Improvements
+
+- Added declared MCP `outputSchema` contracts for all nine exposed tools, matching their existing `structuredContent` payloads so clients can consume typed tool results without output-schema warnings.
+
 ### Fixes
 
 - Fixed a PowerShell parser error in `configure-tailscale-funnel.ps1` by bracing `${LASTEXITCODE}` before a colon in the warning message.

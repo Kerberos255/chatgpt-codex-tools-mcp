@@ -222,3 +222,13 @@ test("screenshot tool returns MCP image content and keeps Windows capture fallba
   assert.match(screenshot, /BitBlt/);
   assert.match(screenshot, /image\/png/);
 });
+
+
+test("all nine MCP tools declare output schemas", () => {
+  const server = readFileSync(join(repoRoot, "src", "server.ts"), "utf8");
+  const outputSchemas = [...server.matchAll(/\boutputSchema:/g)];
+  assert.equal(outputSchemas.length, 9);
+  for (const name of ["localStatusOutputSchema", "filesOutputSchema", "gitOutputSchema", "editOutputSchema", "execOutputSchema", "sqliteOutputSchema", "webOutputSchema", "screenshotOutputSchema"]) {
+    assert.equal(server.includes(name), true, `${name} must remain wired`);
+  }
+});
