@@ -184,3 +184,39 @@ test("CI and release workflows include validation and package gates", () => {
   assert.equal(publishJob.includes("actions/download-artifact@v8"), true);
   assert.equal(builder.includes("SHA256SUMS.txt"), true);
 });
+
+
+test("server exposes exactly the compact nine-tool surface", () => {
+  const server = readFileSync(join(repoRoot, "src", "server.ts"), "utf8");
+  const tools = [...server.matchAll(/server\.registerTool\(\s*["']([^"']+)["']/g)].map((match) => match[1]);
+  assert.deepEqual(tools, [
+    "local_status",
+    "open_workspace",
+    "files",
+    "git",
+    "edit",
+    "exec",
+    "sqlite",
+    "web",
+    "screenshot",
+  ]);
+  for (const retired of [
+    "list_dir", "read_file", "search_files", "find_files", "project_tree",
+    "git_status", "git_diff", "preview_edit", "confirm_edit",
+    "exec_process", "process_start", "process_read", "process_stop",
+    "sqlite_status", "sqlite_schema", "sqlite_select", "sqlite_preview_change", "sqlite_confirm_change",
+    "web_status", "web_search", "web_fetch",
+  ]) {
+    assert.equal(tools.includes(retired), false, `${retired} must not remain exposed`);
+  }
+});
+
+test("screenshot tool returns MCP image content and keeps Windows capture fallbacks", () => {
+  const server = readFileSync(join(repoRoot, "src", "server.ts"), "utf8");
+  const screenshot = readFileSync(join(repoRoot, "src", "screenshot.ts"), "utf8");
+  assert.match(server, /type:\s*["']image["']/);
+  assert.match(server, /mimeType:\s*shot\.mimeType/);
+  assert.match(screenshot, /PrintWindow/);
+  assert.match(screenshot, /BitBlt/);
+  assert.match(screenshot, /image\/png/);
+});

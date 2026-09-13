@@ -16,30 +16,28 @@ import { assertProcessAllowed, runProcess, type ProcessResult } from "./process-
 import { redactText, redactValue } from "./redaction.js";
 import { SessionRegistry } from "./session-registry.js";
 import {
-  sqliteStatus,
   sqliteSchema,
   sqliteSelect,
   sqlitePreviewChange,
   sqliteConfirmChange,
 } from "./sqlite-tools.js";
-import { webFetch, webSearch, webStatus } from "./web.js";
+import { captureScreenshot } from "./screenshot.js";
+import { webFetch, webSearch } from "./web.js";
 import { WorkspaceRegistry } from "./workspaces.js";
-
 const packageMetadata = createRequire(import.meta.url)("../package.json") as { version?: unknown };
 const SERVER_VERSION = typeof packageMetadata.version === "string" ? packageMetadata.version : "0.0.0";
 
 const TOOL_GROUPS = [
   { type: "meta", tools: ["local_status"] },
   { type: "workspace", tools: ["open_workspace"] },
-  { type: "read", tools: ["list_dir", "read_file", "search_files", "find_files", "project_tree"] },
-  { type: "git", tools: ["git_status", "git_diff"] },
-  { type: "edit_write", tools: ["preview_edit", "confirm_edit"] },
-  { type: "exec", tools: ["exec_process"] },
-  { type: "process", tools: ["process_start", "process_read", "process_stop"] },
-  { type: "sqlite", tools: ["sqlite_status", "sqlite_schema", "sqlite_select", "sqlite_preview_change", "sqlite_confirm_change"] },
-  { type: "web", tools: ["web_status", "web_search", "web_fetch"] },
+  { type: "files", tools: ["files"] },
+  { type: "git", tools: ["git"] },
+  { type: "edit", tools: ["edit"] },
+  { type: "exec", tools: ["exec"] },
+  { type: "sqlite", tools: ["sqlite"] },
+  { type: "web", tools: ["web"] },
+  { type: "capture", tools: ["screenshot"] },
 ];
-
 const config = loadConfig();
 const workspaces = new WorkspaceRegistry(config);
 const edits = new EditStore();
@@ -190,19 +188,20 @@ function createMcpServer(): McpServer {
       name: "chatgpt-codex-tools-mcp",
       title: "ChatGPT Codex Tools",
       version: SERVER_VERSION,
-      description: "Codex-style local workspace tools for ChatGPT. Constrained local execution: edit files preview-then-confirm, read/search/tree for inspection, SQLite schema/select + structured change workflow, git status/diff, structured process execution, web search/fetch.",
+      description: "Compact Codex-style local workspace tools for ChatGPT: workspace files, local Git inspection, preview-confirm edits, structured execution, allowlisted SQLite, public web access, and Windows screenshots.",
     },
     {
       instructions:
-        "You are a local coding assistant using workspace-scoped tools. Typical workflow:\n" +
+        "You are a local coding assistant using a compact workspace-scoped toolbox. Typical workflow:\n" +
         "1. `open_workspace` once to get a workspaceId.\n" +
-        "2. Use `list_dir`, `read_file`, `search_files`, `find_files`, `project_tree` for inspection.\n" +
-        "3. `git_status`/`git_diff` to review local changes.\n" +
-        "4. For edits: use `preview_edit` with one or more changes, then `confirm_edit` with the returned action_id.\n" +
-        "5. For SQLite: use `sqlite_schema`/`sqlite_select` for reading, `sqlite_preview_change`/`sqlite_confirm_change` for structured writes.\n" +
-        "6. For execution: prefer `exec_process` for short foreground commands and `process_start`/`process_read`/`process_stop` for long-running commands. Commands use structured argv; shell syntax, pipes, redirection, and shell builtins are not supported.\n" +
-        "7. For web: use `web_search` (SearXNG) and `web_fetch` (public HTTP, blocks local/private networks).\n" +
-        "Use preview-then-confirm for all writes where a paired preview tool exists (file edits, SQLite changes).",
+        "2. Use `files` with action=list/read/search/find; list with recursive=true replaces the old project tree tool.\n" +
+        "3. Use `git` with action=status/diff for local Git only; use GitHub-specific tooling for remote operations.\n" +
+        "4. Use `edit` action=preview, review its diff, then `edit` action=confirm with actionId.\n" +
+        "5. Use `exec` action=run/start/read/stop for structured executable invocation without a shell.\n" +
+        "6. Use `sqlite` action=schema/select/preview/confirm; writes remain preview-then-confirm.\n" +
+        "7. Use `web` action=search/fetch for configured public web access.\n" +
+        "8. Use `screenshot` only when the user asks to inspect current desktop/window UI; it returns PNG pixels directly.\n" +
+        "Use preview-then-confirm for writes where that workflow exists.",
     },
   );
 
@@ -263,260 +262,142 @@ function createMcpServer(): McpServer {
       });
     },
   );
-
   // ============================================================
-  // list_dir — list files in workspace
-  // ============================================================
-
-  server.registerTool(
-    "list_dir",
-    {
-      title: "List directory",
-      description: "List files and subdirectories in an open workspace. Use for browsing project structure.",
-      inputSchema: {
-        workspaceId: z.string(),
-        path: z.string().default("."),
-      },
-      annotations: { readOnlyHint: true },
-      outputSchema: z.object({ result: z.string() }),
-    },
-    async ({ workspaceId, path }) => {
-      const { workspace, absolutePath } = workspaces.resolve(workspaceId, path);
-      assertNotDenied(absolutePath, workspace.root, config.denyGlobs);
-      const entries = await readdir(absolutePath, { withFileTypes: true });
-      const lines = entries
-        .sort((a, b) => a.name.localeCompare(b.name))
-        .map((entry) => `${entry.isDirectory() ? "dir " : "file"} ${entry.name}`)
-        .join("\n");
-      return textResult(lines || "(empty)");
-    },
-  );
-
-  // ============================================================
-  // read_file — read a text file
+  // files — list/read/search/find in one workspace tool
   // ============================================================
 
   server.registerTool(
-    "read_file",
+    "files",
     {
-      title: "Read file",
-      description: "Read a UTF-8 text file inside a workspace. Best for viewing source code, configs, and logs. Output is byte-capped.",
+      title: "Workspace files",
+      description: "Inspect workspace files. action=list supports recursive=true + depth for a project tree; action=read/search/find cover text reading, content search, and filename glob search.",
       inputSchema: {
+        action: z.enum(["list", "read", "search", "find"]),
         workspaceId: z.string(),
-        path: z.string(),
+        path: z.string().default(".").describe("Path relative to workspace root."),
+        recursive: z.boolean().default(false).describe("For action=list, recursively render a project tree."),
+        depth: z.number().int().min(1).max(5).default(3).describe("For recursive list, maximum directory depth."),
+        pattern: z.string().optional().describe("Required for search/find."),
+        caseSensitive: z.boolean().default(false).describe("For search, enable case-sensitive matching."),
+        contextLines: z.number().int().min(0).max(20).default(0).describe("For search, context lines around matches."),
+        maxMatches: z.number().int().min(1).max(5000).default(1000).describe("For search, maximum matching lines."),
+        maxResults: z.number().int().min(1).max(500).default(100).describe("For find, maximum matching files."),
+        include: z.string().optional().describe("For search, only include matching glob paths."),
+        exclude: z.string().optional().describe("For search, exclude matching glob paths."),
       },
       annotations: { readOnlyHint: true },
-      outputSchema: z.object({ result: z.string(), path: z.string(), truncated: z.boolean() }),
     },
-    async ({ workspaceId, path }) => {
+    async ({ action, workspaceId, path, recursive, depth, pattern, caseSensitive, contextLines, maxMatches, maxResults, include, exclude }) => {
       const { workspace, absolutePath } = workspaces.resolve(workspaceId, path);
       assertNotDenied(absolutePath, workspace.root, config.denyGlobs);
-      const content = await readFileCapped(absolutePath, config.maxReadBytes);
-      return textResult(content.text, {
-        path: relativeDisplayPath(workspace.root, absolutePath),
-        truncated: content.truncated,
-      });
-    },
-  );
+      const displayPath = relativeDisplayPath(workspace.root, absolutePath);
 
-  // ============================================================
-  // search_files — full-text search in workspace
-  // ============================================================
+      if (action === "list") {
+        if (recursive) {
+          const tree = await buildProjectTree(workspace.root, absolutePath, 0, depth);
+          return textResult(tree || "(empty)", { action, path: displayPath, recursive, depth });
+        }
+        const entries = await readdir(absolutePath, { withFileTypes: true });
+        const lines = entries
+          .sort((a, b) => a.name.localeCompare(b.name))
+          .map((entry) => `${entry.isDirectory() ? "dir " : "file"} ${entry.name}`)
+          .join("\n");
+        return textResult(lines || "(empty)", { action, path: displayPath, recursive: false });
+      }
 
-  server.registerTool(
-    "search_files",
-    {
-      title: "Search files",
-      description: "Search text content inside a workspace. Uses ripgrep when available, with a Node fallback. Skips node_modules, dist, .git, and denied paths. Supports optional case-sensitivity, context lines, max matches, include/exclude path globs.",
-      inputSchema: {
-        workspaceId: z.string(),
-        pattern: z.string().describe("Text pattern to search for (case-insensitive by default)."),
-        path: z.string().default(".").describe("Starting directory relative to workspace root."),
-        caseSensitive: z.boolean().default(false).describe("Enable case-sensitive matching."),
-        contextLines: z.number().int().min(0).max(20).default(0).describe("Number of context lines to include around each match."),
-        maxMatches: z.number().int().min(1).max(5000).default(1000).describe("Maximum number of matching lines to return."),
-        include: z.string().optional().describe("Only search files matching this glob pattern (e.g. '*.ts', 'src/**/*.js')."),
-        exclude: z.string().optional().describe("Skip files matching this glob pattern (e.g. '*.test.ts', '**/*.min.js')."),
-      },
-      annotations: { readOnlyHint: true },
-      outputSchema: z.object({ result: z.string() }),
-    },
-    async ({ workspaceId, pattern, path, caseSensitive, contextLines, maxMatches, include, exclude }) => {
-      const { workspace, absolutePath } = workspaces.resolve(workspaceId, path);
-      assertNotDenied(absolutePath, workspace.root, config.denyGlobs);
-      const includeMatcher = include ? createGlobMatcher(include, { matchBasename: true }) : null;
-      const excludeMatcher = exclude ? createGlobMatcher(exclude, { matchBasename: true }) : null;
-      const output = await searchTextFiles(
-        workspace.root,
-        absolutePath,
-        pattern,
-        caseSensitive,
-        contextLines,
-        maxMatches,
-        include,
-        exclude,
-        includeMatcher,
-        excludeMatcher,
-      );
-      return textResult(output || "(no matches)");
-    },
-  );
+      if (action === "read") {
+        const content = await readFileCapped(absolutePath, config.maxReadBytes);
+        return textResult(content.text, { action, path: displayPath, truncated: content.truncated });
+      }
 
-  // ============================================================
-  // find_files — find files by name pattern
-  // ============================================================
+      if (!pattern) throw new Error(`pattern is required for files action=${action}.`);
+      if (action === "search") {
+        const includeMatcher = include ? createGlobMatcher(include, { matchBasename: true }) : null;
+        const excludeMatcher = exclude ? createGlobMatcher(exclude, { matchBasename: true }) : null;
+        const output = await searchTextFiles(
+          workspace.root,
+          absolutePath,
+          pattern,
+          caseSensitive,
+          contextLines,
+          maxMatches,
+          include,
+          exclude,
+          includeMatcher,
+          excludeMatcher,
+        );
+        return textResult(output || "(no matches)", { action, path: displayPath });
+      }
 
-  server.registerTool(
-    "find_files",
-    {
-      title: "Find files",
-      description: "Find files by filename pattern (glob) in a workspace. Skips node_modules, dist, .git. Use when you know part of the filename but not the path.",
-      inputSchema: {
-        workspaceId: z.string(),
-        pattern: z.string().describe("Glob pattern to match filenames (e.g. '*.ts', '**/*.test.js', '*config*')."),
-        path: z.string().default(".").describe("Starting directory relative to workspace root."),
-        maxResults: z.number().int().min(1).max(500).default(100).describe("Maximum files to return."),
-      },
-      annotations: { readOnlyHint: true },
-      outputSchema: z.object({ result: z.string() }),
-    },
-    async ({ workspaceId, pattern, path, maxResults }) => {
-      const { workspace, absolutePath } = workspaces.resolve(workspaceId, path);
-      assertNotDenied(absolutePath, workspace.root, config.denyGlobs);
       const matcher = createGlobMatcher(pattern, { matchBasename: true });
       const results = await findFilesByGlob(workspace.root, absolutePath, matcher, maxResults);
-      return textResult(results.length > 0 ? results.join("\n") : "(no matching files)");
+      return textResult(results.length > 0 ? results.join("\n") : "(no matching files)", { action, path: displayPath });
     },
   );
 
   // ============================================================
-  // project_tree — show project directory tree
+  // git — local status/diff only
   // ============================================================
 
   server.registerTool(
-    "project_tree",
+    "git",
     {
-      title: "Project tree",
-      description: "Show a visual directory tree of the workspace. Skips node_modules, dist, .git. Depth-limited. Use for understanding project structure at a glance.",
+      title: "Local Git",
+      description: "Inspect the local Git working tree. action=status runs git status --short; action=diff reviews staged/unstaged diffs. Remote GitHub operations belong in GitHub/gh tooling.",
       inputSchema: {
+        action: z.enum(["status", "diff"]),
         workspaceId: z.string(),
-        path: z.string().default(".").describe("Starting directory relative to workspace root."),
-        depth: z.number().int().min(1).max(5).default(3).describe("Maximum directory depth to traverse."),
-      },
-      annotations: { readOnlyHint: true },
-      outputSchema: z.object({ result: z.string() }),
-    },
-    async ({ workspaceId, path, depth }) => {
-      const { workspace, absolutePath } = workspaces.resolve(workspaceId, path);
-      assertNotDenied(absolutePath, workspace.root, config.denyGlobs);
-      const tree = await buildProjectTree(workspace.root, absolutePath, 0, depth);
-      return textResult(tree || "(empty)");
-    },
-  );
-
-  // ============================================================
-  // git_status — git status
-  // ============================================================
-
-  server.registerTool(
-    "git_status",
-    {
-      title: "Git status",
-      description: "Run git status --short in a workspace. Use to check what's changed, staged, or untracked.",
-      inputSchema: { workspaceId: z.string() },
-      annotations: { readOnlyHint: true },
-      outputSchema: z.object({ result: z.string(), stdout: z.string(), stderr: z.string(), exitCode: z.number().nullable(), timedOut: z.boolean() }),
-    },
-    async ({ workspaceId }) => gitTool(workspaceId, ["status", "--short"]),
-  );
-
-  // ============================================================
-  // git_diff — git diff
-  // ============================================================
-
-  server.registerTool(
-    "git_diff",
-    {
-      title: "Git diff",
-      description: "Review git diffs. Defaults to unstaged stat + full diff. Can inspect staged changes, a single path, stat-only output, and smaller output caps.",
-      inputSchema: {
-        workspaceId: z.string(),
-        staged: z.boolean().default(false).describe("Show staged/cached changes instead of unstaged changes."),
-        path: z.string().optional().describe("Optional file or directory path relative to the workspace root."),
-        statOnly: z.boolean().default(false).describe("Return only git diff --stat, not the full patch."),
-        maxBytes: z.number().int().positive().max(config.maxOutputBytes).default(config.maxOutputBytes).describe("Maximum stdout/stderr bytes returned."),
-      },
-      annotations: { readOnlyHint: true },
-      outputSchema: z.object({
-        result: z.string(),
-        stdout: z.string(),
-        stderr: z.string(),
-        exitCode: z.number().nullable(),
-        timedOut: z.boolean(),
-        staged: z.boolean(),
+        staged: z.boolean().default(false),
         path: z.string().optional(),
-        statOnly: z.boolean(),
-      }),
+        statOnly: z.boolean().default(false),
+        maxBytes: z.number().int().positive().max(config.maxOutputBytes).default(config.maxOutputBytes),
+      },
+      annotations: { readOnlyHint: true },
     },
-    async ({ workspaceId, staged, path, statOnly, maxBytes }) => gitDiffTool(workspaceId, { staged, path, statOnly, maxBytes }),
+    async ({ action, workspaceId, staged, path, statOnly, maxBytes }) => {
+      if (action === "status") return gitTool(workspaceId, ["status", "--short"]);
+      return gitDiffTool(workspaceId, { staged, path, statOnly, maxBytes });
+    },
   );
 
   // ============================================================
-  // preview_edit — new generic file editing (replace_text etc.)
+  // edit — preview/confirm file changes
   // ============================================================
 
   server.registerTool(
-    "preview_edit",
+    "edit",
     {
-      title: "Preview edit",
-      description: "Preview one or more bounded file edits. Does not write. Use confirm_edit with the returned action_id after review.",
+      title: "Edit files",
+      description: "Preview or confirm bounded workspace edits. Use action=preview first; apply only with action=confirm and the returned actionId.",
       inputSchema: {
-        workspaceId: z.string(),
-        changes: z.array(editChangeSchema).min(1).describe("One or more file changes in this batch. Each item uses its type field to determine the required fields."),
+        action: z.enum(["preview", "confirm"]),
+        workspaceId: z.string().optional().describe("Required for preview."),
+        changes: z.array(editChangeSchema).min(1).optional().describe("Required for preview."),
+        actionId: z.string().optional().describe("Required for confirm."),
       },
       annotations: { readOnlyHint: false, destructiveHint: false },
-      outputSchema: z.object({
-        result: z.string(),
-        action_id: z.string(),
-        requires_approval: z.boolean(),
-        changes: z.array(z.object({ path: z.string(), type: z.string(), diff: z.string() })),
-      }),
     },
-    async ({ workspaceId, changes }) => {
-      const typedChanges = changes as Change[];
-      assertPreviewEditPayload(typedChanges);
-      assertEditChangePaths(workspaceId, typedChanges);
-      const { workspace, absolutePath } = workspaces.resolve(workspaceId, ".");
-      const diffs = await previewChanges(absolutePath, typedChanges);
-      const pending = edits.create({ workspaceId, changes: typedChanges, diffs });
-      const combinedDiff = diffs.map((d) => `--- ${d.path} (${d.type}) ---\n${d.diff}`).join("\n\n");
-      return textResult(`Pending edit: ${pending.id}\n\n${combinedDiff}`, {
-        action_id: pending.id,
-        requires_approval: true,
-        changes: diffs,
-      });
-    },
-  );
+    async ({ action, workspaceId, changes, actionId }) => {
+      if (action === "preview") {
+        if (!workspaceId || !changes) throw new Error("workspaceId and changes are required for edit action=preview.");
+        const typedChanges = changes as Change[];
+        assertPreviewEditPayload(typedChanges);
+        assertEditChangePaths(workspaceId, typedChanges);
+        const { absolutePath } = workspaces.resolve(workspaceId, ".");
+        const diffs = await previewChanges(absolutePath, typedChanges);
+        const pending = edits.create({ workspaceId, changes: typedChanges, diffs });
+        const combinedDiff = diffs.map((d) => `--- ${d.path} (${d.type}) ---\n${d.diff}`).join("\n\n");
+        return textResult(`Pending edit: ${pending.id}\n\n${combinedDiff}`, {
+          action_id: pending.id,
+          requires_approval: true,
+          changes: diffs,
+        });
+      }
 
-  // ============================================================
-  // confirm_edit — confirm multi-file edit
-  // ============================================================
-
-  server.registerTool(
-    "confirm_edit",
-    {
-      title: "Confirm edit",
-      description: "Apply a pending file edit created by preview_edit after rechecking paths. Not transactional.",
-      inputSchema: {
-        actionId: z.string(),
-      },
-      annotations: { readOnlyHint: false, destructiveHint: true },
-      outputSchema: z.object({ result: z.string(), applied: z.boolean(), action_id: z.string(), changeCount: z.number() }),
-    },
-    async ({ actionId }) => {
+      if (!actionId) throw new Error("actionId is required for edit action=confirm.");
       const pending = edits.take(actionId);
       assertEditChangePaths(pending.workspaceId, pending.changes);
-      const { workspace, absolutePath } = workspaces.resolve(pending.workspaceId, ".");
+      const { absolutePath } = workspaces.resolve(pending.workspaceId, ".");
       await applyChanges(absolutePath, pending.changes);
       return textResult(`Applied ${pending.changes.length} change(s) from ${actionId}`, {
         applied: true,
@@ -527,270 +408,219 @@ function createMcpServer(): McpServer {
   );
 
   // ============================================================
-  // Structured local execution: foreground and managed processes
+  // exec — run/start/read/stop structured processes
   // ============================================================
 
   server.registerTool(
-    "exec_process",
+    "exec",
     {
-      title: "Exec process",
-      description: "Run a short foreground local executable using structured argv and no shell. Prefer this over shell-style command strings. Pipes, redirection, glob expansion, and shell builtins are not supported.",
+      title: "Execute process",
+      description: "Run or manage local executables with structured argv and no shell. action=run waits for a short command; start/read/stop manage long-running processes.",
       inputSchema: {
-        workspaceId: z.string(),
-        command: z.string().describe("Executable name or absolute executable path, e.g. git, node, python, rg."),
-        args: z.array(z.string()).default([]).describe("Argument vector. Do not include shell syntax such as pipes, redirects, or command chaining."),
+        action: z.enum(["run", "start", "read", "stop"]),
+        workspaceId: z.string().optional().describe("Required for run/start."),
+        command: z.string().optional().describe("Required for run/start."),
+        args: z.array(z.string()).default([]),
         workingDirectory: z.string().default("."),
-        timeoutSeconds: z.number().int().positive().max(300).default(30),
-        maxBytes: z.number().int().positive().max(config.maxOutputBytes).default(config.maxOutputBytes),
+        timeoutSeconds: z.number().int().positive().max(3600).optional(),
+        maxBytes: z.number().int().positive().max(config.maxOutputBytes).optional(),
+        processId: z.string().optional().describe("Required for read/stop."),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
-      outputSchema: z.object({ result: z.string(), stdout: z.string(), stderr: z.string(), exitCode: z.number().nullable(), timedOut: z.boolean() }),
     },
-    async ({ workspaceId, command, args, workingDirectory, timeoutSeconds, maxBytes }) => {
+    async ({ action, workspaceId, command, args, workingDirectory, timeoutSeconds, maxBytes, processId }) => {
+      if (action === "read" || action === "stop") {
+        if (!processId) throw new Error(`processId is required for exec action=${action}.`);
+        return action === "read"
+          ? managedProcessResult(managedProcesses.read(processId))
+          : managedProcessResult(managedProcesses.stop(processId));
+      }
+
+      if (!workspaceId || !command) throw new Error(`workspaceId and command are required for exec action=${action}.`);
       assertProcessAllowed(command, args, config.accessMode);
       const { absolutePath } = workspaces.resolve(workspaceId, workingDirectory);
       const dirStat = await stat(absolutePath);
       if (!dirStat.isDirectory()) throw new Error(`workingDirectory is not a directory: ${workingDirectory}`);
-      const result = await runProcess({
+      const outputLimit = Math.min(maxBytes ?? config.maxOutputBytes, config.maxOutputBytes);
+
+      if (action === "run") {
+        const timeout = Math.min(timeoutSeconds ?? 30, 300);
+        const result = await runProcess({ command, args, cwd: absolutePath, timeoutMs: timeout * 1000, maxOutputBytes: outputLimit });
+        return textResult(formatProcessResult(result), result);
+      }
+
+      const timeout = Math.min(timeoutSeconds ?? 300, 3600);
+      return managedProcessResult(managedProcesses.start({
         command,
         args,
         cwd: absolutePath,
-        timeoutMs: timeoutSeconds * 1000,
-        maxOutputBytes: Math.min(maxBytes, config.maxOutputBytes),
-      });
-      return textResult(formatProcessResult(result), result);
+        timeoutMs: timeout * 1000,
+        maxOutputBytes: outputLimit,
+      }));
     },
-  );
-
-  server.registerTool(
-    "process_start",
-    {
-      title: "Start process",
-      description: "Start a long-running local executable using structured argv and no shell. Use process_read to inspect output and process_stop to stop it.",
-      inputSchema: {
-        workspaceId: z.string(),
-        command: z.string().describe("Executable name or absolute executable path."),
-        args: z.array(z.string()).default([]).describe("Argument vector. Shell syntax is not supported."),
-        workingDirectory: z.string().default("."),
-        timeoutSeconds: z.number().int().positive().max(3600).default(300),
-        maxBytes: z.number().int().positive().max(config.maxOutputBytes).default(config.maxOutputBytes),
-      },
-      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
-      outputSchema: managedProcessOutputSchema(),
-    },
-    async ({ workspaceId, command, args, workingDirectory, timeoutSeconds, maxBytes }) => {
-      assertProcessAllowed(command, args, config.accessMode);
-      const { absolutePath } = workspaces.resolve(workspaceId, workingDirectory);
-      const dirStat = await stat(absolutePath);
-      if (!dirStat.isDirectory()) throw new Error(`workingDirectory is not a directory: ${workingDirectory}`);
-      const snapshot = managedProcesses.start({
-        command,
-        args,
-        cwd: absolutePath,
-        timeoutMs: timeoutSeconds * 1000,
-        maxOutputBytes: Math.min(maxBytes, config.maxOutputBytes),
-      });
-      return managedProcessResult(snapshot);
-    },
-  );
-
-  server.registerTool(
-    "process_read",
-    {
-      title: "Read process",
-      description: "Read the current stdout/stderr/exit state for a process started by process_start.",
-      inputSchema: {
-        processId: z.string(),
-      },
-      annotations: { readOnlyHint: true },
-      outputSchema: managedProcessOutputSchema(),
-    },
-    async ({ processId }) => managedProcessResult(managedProcesses.read(processId)),
-  );
-
-  server.registerTool(
-    "process_stop",
-    {
-      title: "Stop process",
-      description: "Stop a running process started by process_start.",
-      inputSchema: {
-        processId: z.string(),
-      },
-      annotations: { readOnlyHint: false, destructiveHint: true },
-      outputSchema: managedProcessOutputSchema(),
-    },
-    async ({ processId }) => managedProcessResult(managedProcesses.stop(processId)),
   );
 
   // ============================================================
-  // SQLite: status, schema, select, preview_change, confirm_change
+  // sqlite — schema/select/preview/confirm in one tool
   // ============================================================
 
   server.registerTool(
-    "sqlite_status",
+    "sqlite",
     {
-      title: "SQLite status",
-      description: "Show SQLite tool configuration. SQLite tools are disabled unless CTM_SQLITE_TOOLS=1 and CTM_SQLITE_ALLOWED_DBS is set.",
-      inputSchema: {},
-      annotations: { readOnlyHint: true },
-      outputSchema: z.object({ result: z.string() }),
-    },
-    async () => textResult(JSON.stringify(sqliteStatus(config), null, 2)),
-  );
-
-  if (config.sqliteToolsEnabled) {
-    server.registerTool(
-      "sqlite_schema",
-      {
-        title: "SQLite schema",
-        description: "Inspect tables, views, indexes, and triggers for an allowed database. Does not read row data. Use to discover table structure before SELECT or CHANGE operations.",
-        inputSchema: {
-          dbPath: z.string().optional().describe("Absolute path to an allowed SQLite database. Omit only when one DB is allowed."),
-        },
-        annotations: { readOnlyHint: true },
-        outputSchema: z.object({ result: z.string(), rows: z.array(z.record(z.string(), z.unknown())) }),
+      title: "SQLite",
+      description: "Allowlisted SQLite inspection and structured writes. action=schema/select are read-only; preview/confirm preserve the two-step write workflow.",
+      inputSchema: {
+        action: z.enum(["schema", "select", "preview", "confirm"]),
+        dbPath: z.string().optional(),
+        sql: z.string().optional().describe("Required for select; SELECT/WITH or safe PRAGMA only."),
+        params: z.array(z.union([z.string(), z.number(), z.null()])).default([]),
+        limit: z.number().int().positive().max(config.sqliteMaxRows).optional(),
+        change: sqliteChangeSchema.optional().describe("Required for preview."),
+        actionId: z.string().optional().describe("Required for confirm."),
       },
-      async ({ dbPath }) => {
+      annotations: { readOnlyHint: false, destructiveHint: false },
+    },
+    async ({ action, dbPath, sql, params, limit, change, actionId }) => {
+      if (!config.sqliteToolsEnabled) throw new Error("SQLite tools are disabled. Enable sqlite in config.json or CTM_SQLITE_TOOLS=1.");
+      if (action === "schema") {
         const rows = sqliteSchema(config, dbPath);
         return textResult(JSON.stringify(rows, null, 2), { rows });
-      },
-    );
-
-    server.registerTool(
-      "sqlite_select",
-      {
-        title: "SQLite select",
-        description: "Run one read-only SELECT/WITH or safe PRAGMA statement. Write SQL is blocked. Use for ad-hoc queries, or as precursor to a structured change.",
-        inputSchema: {
-          dbPath: z.string().optional().describe("Absolute path to an allowed SQLite database. Omit only when one DB is allowed."),
-          sql: z.string().describe("Single read-only SQL statement. SELECT/WITH and safe PRAGMA only."),
-          params: z.array(z.union([z.string(), z.number(), z.null()])).default([]).describe("Positional SQL parameters (?, ?, etc)."),
-          limit: z.number().int().positive().max(config.sqliteMaxRows).default(config.sqliteMaxRows).describe("Maximum rows returned."),
-        },
-        annotations: { readOnlyHint: true },
-        outputSchema: z.object({ result: z.string(), rows: z.array(z.record(z.string(), z.unknown())) }),
-      },
-      async ({ dbPath, sql, params, limit }) => {
-        const rows = sqliteSelect(config, { dbPath, sql, params, limit });
+      }
+      if (action === "select") {
+        if (!sql) throw new Error("sql is required for sqlite action=select.");
+        const rows = sqliteSelect(config, { dbPath, sql, params, limit: limit ?? config.sqliteMaxRows });
         return textResult(JSON.stringify(rows, null, 2), { rows });
-      },
-    );
-
-    server.registerTool(
-      "sqlite_preview_change",
-      {
-        title: "SQLite preview change",
-        description: "Preview a bounded structured SQLite insert/update/delete on an allowed DB. Does not write. Use sqlite_confirm_change after review.",
-        inputSchema: {
-          dbPath: z.string().optional().describe("Absolute path to an allowed SQLite database."),
-          change: sqliteChangeSchema.describe("SQLite change object. The type field selects insert, update, or delete and determines the required fields."),
-        },
-        annotations: { readOnlyHint: false, destructiveHint: false },
-        outputSchema: z.object({
-          result: z.string(),
-          action_id: z.string(),
-          requires_approval: z.boolean(),
-          beforeRows: z.array(z.record(z.string(), z.unknown())),
-          diff: z.string(),
-        }),
-      },
-      async ({ dbPath, change }) => {
+      }
+      if (action === "preview") {
+        if (!change) throw new Error("change is required for sqlite action=preview.");
         assertSqliteChangePayload(change);
-        const { action, beforeRows, diff } = sqlitePreviewChange(config, { dbPath, change: change as any });
-        return textResult(`Pending sqlite change: ${action.id}\n\n${diff}`, {
-          action_id: action.id,
+        const { action: pending, beforeRows, diff } = sqlitePreviewChange(config, { dbPath, change: change as any });
+        return textResult(`Pending sqlite change: ${pending.id}\n\n${diff}`, {
+          action_id: pending.id,
           requires_approval: true,
           beforeRows,
           diff,
         });
-      },
-    );
-
-    server.registerTool(
-      "sqlite_confirm_change",
-      {
-        title: "SQLite confirm change",
-        description: "Apply a pending SQLite change created by sqlite_preview_change. Re-verifies 'expected' fields before writing. Prevents applying stale previews.",
-        inputSchema: {
-          actionId: z.string(),
-        },
-        annotations: { readOnlyHint: false, destructiveHint: true },
-        outputSchema: z.object({ result: z.string(), applied: z.boolean(), action_id: z.string(), change_type: z.string(), table: z.string() }),
-      },
-      async ({ actionId }) => {
-        const result = sqliteConfirmChange(config, actionId);
-        return textResult(
-          `Applied sqlite change: ${actionId} (${result.change_type} on ${result.table})`,
-          result,
-        );
-      },
-    );
-  }
+      }
+      if (!actionId) throw new Error("actionId is required for sqlite action=confirm.");
+      const result = sqliteConfirmChange(config, actionId);
+      return textResult(`Applied sqlite change: ${actionId} (${result.change_type} on ${result.table})`, result);
+    },
+  );
 
   // ============================================================
-  // Web: always-registered status, gated search/fetch
+  // web — search/fetch in one tool
   // ============================================================
 
   server.registerTool(
-    "web_status",
+    "web",
     {
-      title: "Web status",
-      description: "Show web tools configuration: whether web_search and web_fetch are available and how they are configured.",
-      inputSchema: {},
-      annotations: { readOnlyHint: true },
-      outputSchema: z.object({ result: z.string() }),
-    },
-    async () => textResult(JSON.stringify(webStatus(config), null, 2)),
-  );
-
-  if (config.webToolsEnabled) {
-    server.registerTool(
-      "web_search",
-      {
-        title: "Web search",
-        description: "Search the web via SearXNG. Requires CTM_WEB_TOOLS=1 and CTM_SEARCH_PROVIDER=searxng. Use for looking up docs, news, or public information.",
-        inputSchema: {
-          query: z.string().describe("Search query."),
-          limit: z.number().int().min(1).max(10).default(5).describe("Number of results (1-10)."),
-        },
-        annotations: { readOnlyHint: true },
-        outputSchema: z.object({ result: z.string(), results: z.array(z.object({ title: z.string(), url: z.string(), snippet: z.string(), engine: z.string().optional() })) }),
+      title: "Web",
+      description: "Configured public web access. action=search queries SearXNG; action=fetch retrieves public HTTP(S) while blocking private/local targets.",
+      inputSchema: {
+        action: z.enum(["search", "fetch"]),
+        query: z.string().optional().describe("Required for search."),
+        limit: z.number().int().min(1).max(10).default(5),
+        url: z.string().url().optional().describe("Required for fetch."),
       },
-      async ({ query, limit }) => {
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    },
+    async ({ action, query, limit, url }) => {
+      if (!config.webToolsEnabled) throw new Error("Web tools are disabled. Enable web in config.json or CTM_WEB_TOOLS=1.");
+      if (action === "search") {
+        if (!query) throw new Error("query is required for web action=search.");
         const results = await webSearch(config, query, limit);
         return textResult(
           results.length === 0 ? "(no results)" : results.map((r) => `- ${r.title}\n  ${r.url}\n  ${r.snippet}`).join("\n\n"),
           { results },
         );
-      },
-    );
+      }
+      if (!url) throw new Error("url is required for web action=fetch.");
+      const result = await webFetch(config, url);
+      return textResult(
+        [
+          `final_url: ${result.finalUrl}`,
+          `status: ${result.status}`,
+          `content_type: ${result.contentType}`,
+          result.truncated ? "[output truncated]\n" : "",
+          result.text.slice(0, config.maxReadBytes),
+        ].filter(Boolean).join("\n"),
+        result,
+      );
+    },
+  );
 
-    server.registerTool(
-      "web_fetch",
-      {
-        title: "Web fetch",
-        description: "Fetch a public HTTP(S) page. Blocks localhost, private networks, and credentials in URLs. Use to read documentation, API responses, or web pages. No cookies or auth headers are sent.",
-        inputSchema: {
-          url: z.string().url().describe("HTTP or HTTPS URL."),
-        },
-        annotations: { readOnlyHint: true },
-        outputSchema: z.object({ result: z.string(), finalUrl: z.string(), status: z.number(), contentType: z.string(), title: z.string(), text: z.string(), truncated: z.boolean() }),
+  // ============================================================
+  // screenshot — return desktop/window pixels directly to ChatGPT
+  // ============================================================
+
+  server.registerTool(
+    "screenshot",
+    {
+      title: "Screenshot",
+      description: "Capture the current Windows desktop, monitor, window, or screen region and return a PNG image directly. Use only when the user asks to inspect current UI. Optional savePath must be inside an open workspace.",
+      inputSchema: {
+        mode: z.enum(["desktop", "monitor", "window", "region"]).default("desktop"),
+        workspaceId: z.string().optional().describe("Required only when savePath is used."),
+        monitor: z.number().int().min(0).default(0),
+        windowTitle: z.string().optional().describe("For window mode, case-insensitive title substring."),
+        windowHandle: z.number().int().positive().optional().describe("For window mode, optional HWND as an integer."),
+        x: z.number().int().optional(),
+        y: z.number().int().optional(),
+        width: z.number().int().positive().max(20000).optional(),
+        height: z.number().int().positive().max(20000).optional(),
+        savePath: z.string().optional().describe("Optional workspace-relative PNG path. Omit to avoid writing a file."),
       },
-      async ({ url }) => {
-        const result = await webFetch(config, url);
-        return textResult(
-          [
-            `final_url: ${result.finalUrl}`,
-            `status: ${result.status}`,
-            `content_type: ${result.contentType}`,
-            result.truncated ? "[output truncated]\n" : "",
-            result.text.slice(0, config.maxReadBytes),
-          ].filter(Boolean).join("\n"),
-          result,
-        );
-      },
-    );
-  }
+      annotations: { readOnlyHint: false, destructiveHint: false },
+    },
+    async ({ mode, workspaceId, monitor, windowTitle, windowHandle, x, y, width, height, savePath }) => {
+      let absoluteSavePath: string | undefined;
+      let displaySavePath: string | undefined;
+      if (savePath) {
+        if (!workspaceId) throw new Error("workspaceId is required when screenshot savePath is used.");
+        const resolved = workspaces.resolve(workspaceId, savePath);
+        assertNotDenied(resolved.absolutePath, resolved.workspace.root, config.denyGlobs);
+        absoluteSavePath = resolved.absolutePath;
+        displaySavePath = relativeDisplayPath(resolved.workspace.root, resolved.absolutePath);
+      }
+
+      const shot = await captureScreenshot({
+        mode,
+        monitor,
+        windowTitle,
+        windowHandle,
+        x,
+        y,
+        width,
+        height,
+        savePath: absoluteSavePath,
+      });
+      const matchedWindowTitle = shot.windowTitle ? redactText(shot.windowTitle) : undefined;
+      const summary = [
+        `Captured ${mode} screenshot: ${shot.width}x${shot.height}`,
+        matchedWindowTitle ? `window: ${matchedWindowTitle}` : undefined,
+        displaySavePath ? `saved: ${displaySavePath}` : "saved: no (returned in-memory)",
+      ].filter(Boolean).join("\n");
+      const redactedSummary = redactText(summary);
+      const structuredContent = redactValue({
+        result: redactedSummary,
+        mode,
+        width: shot.width,
+        height: shot.height,
+        left: shot.left,
+        top: shot.top,
+        windowTitle: matchedWindowTitle,
+        savedPath: displaySavePath,
+      }) as Record<string, unknown>;
+      return {
+        content: [
+          { type: "text" as const, text: redactedSummary },
+          { type: "image" as const, data: shot.data, mimeType: shot.mimeType },
+        ],
+        structuredContent,
+      };
+    },
+  );
 
   return server;
 }

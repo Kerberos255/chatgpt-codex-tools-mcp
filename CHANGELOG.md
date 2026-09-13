@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.6.0 (2026-09-13)
+
+### Breaking changes
+
+- Consolidated the exposed MCP surface into nine tools: `local_status`, `open_workspace`, `files`, `git`, `edit`, `exec`, `sqlite`, `web`, and `screenshot`.
+- Replaced the previous individual file, Git, process, SQLite, and web tool names with action-based single tools while preserving their capabilities and preview/confirm write safety.
+
+### Added
+
+- Added a Windows `screenshot` tool for desktop, monitor, window, and region capture. PNG pixels are returned directly as MCP image content; writing a file is optional and remains workspace-scoped.
+- Window capture uses `PrintWindow`, while desktop/monitor/region capture uses GDI screen capture and reports a clear error when the interactive desktop is unavailable.
+
+### Changed
+
+- Local Git inspection is now intentionally limited to `git` actions `status` and `diff`; GitHub remote operations remain the responsibility of GitHub/`gh` tooling.
+- `local_status` remains the single place for optional Web/SQLite feature status.
+
 ## v0.5.0 (2026-09-12)
 
 ### Added

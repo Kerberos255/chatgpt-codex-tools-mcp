@@ -185,34 +185,38 @@ server restart still resets all sessions.
 
 ## Tools
 
-| Group | Tools | Purpose |
+| Group | Tool | Actions / purpose |
 | --- | --- | --- |
-| Meta | `local_status` | Show version, access mode, roots, limits, and optional feature status. |
+| Meta | `local_status` | Show version, access mode, roots, limits, and Web/SQLite feature status. |
 | Workspace | `open_workspace` | Open a directory under `CTM_ALLOWED_ROOTS` and return a `workspaceId`. |
-| Read | `list_dir`, `read_file`, `search_files`, `find_files`, `project_tree` | Inspect project content without writing. |
-| Git | `git_status`, `git_diff` | Review working-tree state and staged/unstaged diffs. |
-| Edit | `preview_edit`, `confirm_edit` | Preview and then apply bounded multi-file edits. |
-| Process | `exec_process`, `process_start`, `process_read`, `process_stop` | Run structured local executables without a shell. |
-| SQLite | `sqlite_status`, `sqlite_schema`, `sqlite_select`, `sqlite_preview_change`, `sqlite_confirm_change` | Optional allowlisted database inspection and structured writes. |
-| Web | `web_status`, `web_search`, `web_fetch` | Optional SearXNG search and public HTTP fetch. |
+| Files | `files` | `list`, `read`, `search`, `find`; recursive `list` with `depth` replaces the old project-tree tool. |
+| Git | `git` | Local `status` and `diff` only. Use GitHub/`gh` tooling for remote operations. |
+| Edit | `edit` | `preview` and `confirm` bounded multi-file edits. |
+| Exec | `exec` | `run`, `start`, `read`, `stop` structured executables without a shell. |
+| SQLite | `sqlite` | Optional allowlisted `schema`, `select`, `preview`, `confirm`. |
+| Web | `web` | Optional `search` and public HTTP `fetch`. |
+| Capture | `screenshot` | Windows `desktop`, `monitor`, `window`, or `region` capture; returns PNG image content directly. |
 
-Optional web and SQLite tools are registered only when enabled. Their status
-tools remain available for diagnostics.
+The public MCP surface is intentionally kept to these nine tools. Web and SQLite
+actions report a clear disabled error when their feature is off; `local_status`
+shows the current configuration.
 
 ## Recommended workflow
 
 ```text
 open_workspace
-  -> inspect with read/search/tree and git tools
-  -> preview_edit
+  -> files / git
+  -> edit(action="preview")
   -> review the diff
-  -> confirm_edit
+  -> edit(action="confirm", actionId=...)
 ```
 
-For processes, pass a real executable and an argv array:
+For processes, pass an action, a real executable, and an argv array:
 
 ```json
 {
+  "action": "run",
+  "workspaceId": "...",
   "command": "npm",
   "args": ["run", "build"]
 }
@@ -316,9 +320,9 @@ Enable in `config.json`:
 }
 ```
 
-- `web_search` queries only the configured SearXNG instance.
-- `web_fetch` accepts public HTTP(S) URLs and blocks localhost, private network
-  targets, embedded credentials, and unsafe redirects.
+- `web` with `action="search"` queries only the configured SearXNG instance.
+- `web` with `action="fetch"` accepts public HTTP(S) URLs and blocks localhost,
+  private network targets, embedded credentials, and unsafe redirects.
 - No cookies, browser login state, authorization headers, or client certificates
   are forwarded.
 
@@ -336,25 +340,33 @@ Enable SQLite and list exact database paths:
 }
 ```
 
-- `sqlite_schema` reads schema metadata.
-- `sqlite_select` accepts one read-only `SELECT`/`WITH` or safe `PRAGMA`.
-- Writes use `sqlite_preview_change` followed by `sqlite_confirm_change`.
+- `sqlite` with `action="schema"` reads schema metadata.
+- `sqlite` with `action="select"` accepts one read-only `SELECT`/`WITH` or safe `PRAGMA`.
+- Writes use `sqlite` with `action="preview"`, followed by `action="confirm"` with the returned `actionId`.
 - Insert, bounded update/delete, expected-field revalidation, and `jsonSet`
   dot paths such as `job_json.enabled` are supported.
 - Raw write SQL and subqueries are not exposed.
 
 ## File edit operations
 
-`preview_edit` accepts multi-file batches with these operation types:
+`edit` with `action="preview"` accepts multi-file batches with these operation types:
 
 ```text
 replace_text   replace_range   insert_before   insert_after
 append         create          overwrite       rename         delete
 ```
 
-The preview returns an action id and per-file diffs. `confirm_edit` rechecks
-workspace and deny boundaries before applying the batch. File batches are not
+The preview returns an action id and per-file diffs. `edit` with `action="confirm"`
+rechecks workspace and deny boundaries before applying the batch. File batches are not
 transactional, so keep related edits small and review the entire preview.
+
+## Screenshot tool
+
+`screenshot` is available on Windows and returns PNG pixels directly as MCP image content. By default it does not write a file.
+
+- `mode="window"` accepts a case-insensitive `windowTitle` substring or a `windowHandle`; it uses Windows `PrintWindow`, so it can capture a window even when it is obscured.
+- `mode="desktop"`, `monitor`, and `region` capture the interactive desktop. Windows may deny screen-surface access while the desktop is locked or switched away; the tool reports that condition instead of returning a blank image.
+- Optional `savePath` is workspace-relative, requires `workspaceId`, and still passes the normal workspace and deny-path checks.
 
 ## Security rules
 
@@ -387,7 +399,7 @@ consistency, and CI/CD gates.
 Pull requests run CI on Node.js 20 and 24, smoke-test the HTTP server, parse all
 PowerShell scripts on Windows, and perform a release-package dry run.
 
-Pushing a tag that exactly matches `package.json`, such as `v0.5.0`, triggers
+Pushing a tag that exactly matches `package.json`, such as `v0.6.0`, triggers
 the Release workflow. It verifies that the tagged commit belongs to `main`,
 runs the full checks, builds a ZIP containing source plus compiled `dist`,
 generates `SHA256SUMS.txt`, and creates the GitHub Release.
@@ -412,8 +424,8 @@ is accepted. Shell executables and shell syntax are blocked in every mode.
 ### SQLite tools are unavailable
 
 Enable SQLite, add an exact database path, and use a Node runtime with
-`node:sqlite` support. `sqlite_status` reports whether the current runtime has
-that module.
+`node:sqlite` support. `local_status` reports whether SQLite is enabled and
+which databases are allowlisted.
 
 ### `dist/server.js` is missing
 

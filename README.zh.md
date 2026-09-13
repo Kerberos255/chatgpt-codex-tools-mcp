@@ -180,33 +180,36 @@ http://127.0.0.1:3333/healthz
 
 ## 工具目录
 
-| 分组 | 工具 | 用途 |
+| 分组 | 工具 | 操作 / 用途 |
 | --- | --- | --- |
-| Meta | `local_status` | 查看版本、访问模式、根路径、限制和可选功能状态。 |
+| Meta | `local_status` | 查看版本、访问模式、根路径、限制和 Web/SQLite 状态。 |
 | Workspace | `open_workspace` | 打开 `CTM_ALLOWED_ROOTS` 下的目录并返回 `workspaceId`。 |
-| Read | `list_dir`、`read_file`、`search_files`、`find_files`、`project_tree` | 只读检查项目内容。 |
-| Git | `git_status`、`git_diff` | 查看工作区状态和暂存/未暂存差异。 |
-| Edit | `preview_edit`、`confirm_edit` | 预览并应用受限的多文件编辑。 |
-| Process | `exec_process`、`process_start`、`process_read`、`process_stop` | 不经过 Shell 运行结构化本地进程。 |
-| SQLite | `sqlite_status`、`sqlite_schema`、`sqlite_select`、`sqlite_preview_change`、`sqlite_confirm_change` | 可选的白名单数据库检查与结构化写入。 |
-| Web | `web_status`、`web_search`、`web_fetch` | 可选的 SearXNG 搜索和公共 HTTP 抓取。 |
+| Files | `files` | `list`、`read`、`search`、`find`；递归 `list` + `depth` 取代原项目树工具。 |
+| Git | `git` | 仅本地 `status`、`diff`；GitHub 远端操作交给 GitHub/`gh` 工具。 |
+| Edit | `edit` | `preview`、`confirm`，保留编辑预览确认。 |
+| Exec | `exec` | `run`、`start`、`read`、`stop`，不经过 Shell。 |
+| SQLite | `sqlite` | 可选白名单数据库的 `schema`、`select`、`preview`、`confirm`。 |
+| Web | `web` | 可选 `search` 和公共 HTTP `fetch`。 |
+| Capture | `screenshot` | Windows 桌面、显示器、窗口或区域截图，直接返回 PNG 图片内容。 |
 
-Web 和 SQLite 的具体工具只在启用后注册；状态工具始终可用于诊断。
+公开 MCP 接口固定收敛为这 9 个工具。Web / SQLite 未启用时对应 action 会明确报未启用；当前状态统一看 `local_status`。
 
 ## 推荐工作流
 
 ```text
 open_workspace
-  → 使用 read/search/tree 和 Git 工具检查
-  → preview_edit
+  → files / git
+  → edit(action="preview")
   → 审阅 diff
-  → confirm_edit
+  → edit(action="confirm", actionId=...)
 ```
 
-进程执行需要传真实可执行文件和 argv 数组：
+进程执行需要传 action、真实可执行文件和 argv 数组：
 
 ```json
 {
+  "action": "run",
+  "workspaceId": "...",
   "command": "npm",
   "args": ["run", "build"]
 }
@@ -307,8 +310,8 @@ CTM_ACCESS_MODE=full
 }
 ```
 
-- `web_search` 只查询配置的 SearXNG 实例。
-- `web_fetch` 只接受公共 HTTP(S) 地址，并阻止 localhost、私网目标、嵌入凭据和
+- `web` 的 `action="search"` 只查询配置的 SearXNG 实例。
+- `web` 的 `action="fetch"` 只接受公共 HTTP(S) 地址，并阻止 localhost、私网目标、嵌入凭据和
   不安全重定向。
 - 不转发 cookie、浏览器登录态、Authorization 头或客户端证书。
 
@@ -326,24 +329,32 @@ CTM_ACCESS_MODE=full
 }
 ```
 
-- `sqlite_schema` 读取 schema 元数据。
-- `sqlite_select` 接受一条只读 `SELECT`/`WITH` 或安全 `PRAGMA`。
-- 写入使用 `sqlite_preview_change` 后接 `sqlite_confirm_change`。
+- `sqlite` 的 `action="schema"` 读取 schema 元数据。
+- `sqlite` 的 `action="select"` 接受一条只读 `SELECT`/`WITH` 或安全 `PRAGMA`。
+- 写入先用 `sqlite` 的 `action="preview"`，再用返回的 `actionId` 执行 `action="confirm"`。
 - 支持 insert、受限 update/delete、expected 字段复核，以及
   `job_json.enabled` 形式的 `jsonSet` 点路径。
 - 不暴露原始写入 SQL 或子查询。
 
 ## 文件编辑操作
 
-`preview_edit` 支持多文件批次和以下类型：
+`edit` 的 `action="preview"` 支持多文件批次和以下类型：
 
 ```text
 replace_text   replace_range   insert_before   insert_after
 append         create          overwrite       rename         delete
 ```
 
-预览会返回 action id 和逐文件 diff。`confirm_edit` 在应用前重新检查工作区和拒绝
+预览会返回 action id 和逐文件 diff。`edit` 的 `action="confirm"` 在应用前重新检查工作区和拒绝
 边界。文件批次不是事务性的，因此应保持批次较小并审阅完整预览。
+
+## 截图工具
+
+`screenshot` 仅在 Windows 上提供，直接以 MCP 图片内容返回 PNG；默认不落盘。
+
+- `mode="window"` 可按窗口标题子串或 `windowHandle` 截图，使用 Windows `PrintWindow`，窗口被其他窗口遮挡时也可抓取。
+- `mode="desktop"`、`monitor`、`region` 抓取当前交互桌面。若 Windows 正处于锁屏或桌面切换状态而拒绝屏幕表面访问，工具会明确报错，不会返回黑图冒充成功。
+- 可选 `savePath` 必须配合 `workspaceId`，路径仍受工作区边界和 deny 规则约束。
 
 ## 安全规则
 
@@ -375,7 +386,7 @@ npm run check
 Pull Request 会在 Node.js 20 和 24 上运行 CI、启动 HTTP 服务做 smoke test、在
 Windows 上解析全部 PowerShell 脚本，并干跑一次 Release 打包。
 
-推送与 `package.json` 完全一致的标签（如 `v0.5.0`）后，会触发 Release 工作流。
+推送与 `package.json` 完全一致的标签（如 `v0.6.0`）后，会触发 Release 工作流。
 它会确认标签提交属于 `main`、重新运行完整检查、构建包含源码和已编译 `dist` 的
 ZIP、生成 `SHA256SUMS.txt`，并自动创建 GitHub Release。
 
@@ -397,8 +408,8 @@ ZIP、生成 `SHA256SUMS.txt`，并自动创建 GitHub Release。
 
 ### SQLite 工具不可用
 
-启用 SQLite、添加精确数据库路径，并使用支持 `node:sqlite` 的 Node。可通过
-`sqlite_status` 查看当前运行时是否支持该模块。
+启用 SQLite、添加精确数据库路径，并使用支持 `node:sqlite` 的 Node。
+`local_status` 会显示 SQLite 是否启用以及当前数据库白名单。
 
 ### 缺少 `dist/server.js`
 
