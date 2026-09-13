@@ -269,8 +269,7 @@ if errorlevel 1 (
   exit /b 1
 )
 :gateway_ready
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\scripts\configure-tailscale-funnel.ps1"
-if errorlevel 1 exit /b %ERRORLEVEL%
+start "Tailscale Funnel" powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\scripts\configure-tailscale-funnel.ps1"
 start "Tailscale MCP Watchdog" powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\scripts\watch-tailscale-mcp.ps1"
 exit /b 0
 

@@ -96,9 +96,10 @@ try {
         switch ($funnelState) {
           "expected" { }
           "missing" {
-            Write-WatchLog "Funnel 443 mapping is missing; restoring 443 -> 3334"
-            & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $funnelScript
-            if ($LASTEXITCODE -ne 0) { Write-WatchLog "Funnel restore failed with exit $LASTEXITCODE" }
+            Write-WatchLog "Funnel 443 mapping is missing; starting a foreground Funnel window for 443 -> 3334"
+            Start-Process -FilePath "powershell.exe" -ArgumentList @(
+              "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $funnelScript
+            ) | Out-Null
           }
           "conflict" { Write-WatchLog "Funnel 443 is owned by another mapping; refusing to overwrite it" }
           default { Write-WatchLog "Could not inspect Funnel 443 state; leaving existing mappings untouched" }

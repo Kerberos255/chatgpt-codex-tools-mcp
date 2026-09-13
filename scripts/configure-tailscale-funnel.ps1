@@ -27,32 +27,18 @@ function Find-NodeExe {
   return $candidates | Where-Object { $_ -and (Test-Path -LiteralPath $_) } | Select-Object -First 1
 }
 
-function Invoke-TailscaleBestEffort {
-  param(
-    [Parameter(Mandatory = $true)]
-    [string[]]$Arguments,
-    [switch]$Quiet
-  )
-
-  $previousErrorActionPreference = $ErrorActionPreference
-  $nativePreferenceVariable = Get-Variable -Name PSNativeCommandUseErrorActionPreference -ErrorAction SilentlyContinue
-  $previousNativePreference = if ($nativePreferenceVariable) { $PSNativeCommandUseErrorActionPreference } else { $null }
+function Get-Funnel443State([string]$TailscaleExe) {
   try {
-    $ErrorActionPreference = "Continue"
-    if ($nativePreferenceVariable) { $PSNativeCommandUseErrorActionPreference = $false }
-    if ($Quiet) {
-      & $tailscale @Arguments 2>$null | Out-Null
-    } else {
-      & $tailscale @Arguments
-    }
-    if (-not $Quiet -and $LASTEXITCODE -ne 0) {
-      Write-Warning "Tailscale command failed with exit ${LASTEXITCODE}: tailscale $($Arguments -join ' ')"
-    }
+    $raw = & $TailscaleExe funnel status --json 2>$null
+    if ($LASTEXITCODE -ne 0 -or -not $raw) { return "unknown" }
+    $status = $raw | ConvertFrom-Json
+    $property = $status.TCP.PSObject.Properties["443"]
+    if (-not $property) { return "missing" }
+    $route = $property.Value
+    if ([string]$route.TCPForward -eq "127.0.0.1:3334" -and [string]$route.TerminateTLS) { return "expected" }
+    return "conflict"
   } catch {
-    if (-not $Quiet) { Write-Warning "Tailscale command failed: $($_.Exception.Message)" }
-  } finally {
-    if ($nativePreferenceVariable) { $PSNativeCommandUseErrorActionPreference = $previousNativePreference }
-    $ErrorActionPreference = $previousErrorActionPreference
+    return "unknown"
   }
 }
 
@@ -63,9 +49,32 @@ if (-not $node) { throw "Node.js was not found." }
 $status = (& $node (Join-Path $projectRoot "scripts\check-tailscale.mjs") | ConvertFrom-Json)
 if (-not $status.running) { throw "Tailscale is not connected." }
 
-& $tailscale funnel --bg --yes --tls-terminated-tcp=443 tcp://127.0.0.1:3334
-if ($LASTEXITCODE -ne 0) { throw "Failed to configure Tailscale Funnel on HTTPS 443." }
-Write-Host "Tailscale MCP Funnel is ready: HTTPS 443 -> OAuth gateway 3334 -> MCP 3333"
+$mutex = New-Object System.Threading.Mutex($false, "Local\ChatGPTCodexToolsMcpTailscaleFunnel")
+$hasMutex = $false
+try {
+  $hasMutex = $mutex.WaitOne(0, $false)
+  if (-not $hasMutex) {
+    Write-Host "Tailscale MCP Funnel foreground session is already running."
+    exit 0
+  }
 
-# Status is informational. A display/query failure must not turn a successful 443 setup into a startup failure.
-Invoke-TailscaleBestEffort -Arguments @("funnel", "status")
+  $funnelState = Get-Funnel443State $tailscale
+  switch ($funnelState) {
+    "expected" {
+      Write-Host "Switching existing Funnel 443 mapping from persistent background mode to foreground mode..."
+      & $tailscale funnel --tls-terminated-tcp=443 off
+      if ($LASTEXITCODE -ne 0) { throw "Failed to stop the existing Tailscale Funnel 443 mapping." }
+    }
+    "missing" { }
+    "conflict" { throw "HTTPS 443 is already used by another Tailscale Funnel mapping; refusing to overwrite it." }
+    default { throw "Could not inspect the current Tailscale Funnel 443 state; refusing to change it." }
+  }
+
+  Write-Host "Starting Tailscale MCP Funnel in foreground: HTTPS 443 -> OAuth gateway 3334 -> MCP 3333"
+  Write-Host "Keep this window open. Closing it or pressing Ctrl+C stops the Funnel."
+  & $tailscale funnel --yes --tls-terminated-tcp=443 tcp://127.0.0.1:3334
+  if ($LASTEXITCODE -ne 0) { throw "Tailscale Funnel foreground session exited with code $LASTEXITCODE." }
+} finally {
+  if ($hasMutex) { $mutex.ReleaseMutex() | Out-Null }
+  $mutex.Dispose()
+}

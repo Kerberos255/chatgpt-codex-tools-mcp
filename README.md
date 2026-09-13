@@ -102,12 +102,12 @@ start-tailscale-mcp.cmd
 
 Each launcher starts the MCP server when needed, then starts only its own tunnel path. The Tailscale launcher exposes MCP as `HTTPS 443 -> OAuth gateway 3334 -> MCP 3333`.
 
-On a normal cold start, expect two visible console windows:
+On a normal cold start, the main visible console windows are:
 
 - OpenAI mode: **Codex MCP Server** + **OpenAI MCP Tunnel**.
-- Tailscale mode: **Codex MCP Server** + **Tailscale OAuth Gateway**.
+- Tailscale mode: **Codex MCP Server** + **Tailscale OAuth Gateway** + **Tailscale Funnel**.
 
-Tailscale Funnel itself is maintained by the Tailscale service/app and does not open a separate console window. If a required component is already healthy, the launcher reuses it instead of opening a duplicate window. Keep the visible MCP/tunnel or OAuth Gateway windows open while that connection is in use.
+The Tailscale Funnel deliberately runs in the foreground. Keep its window open while using the Tailscale connection; closing it or pressing `Ctrl+C` stops the Funnel mapping on HTTPS 443. The watchdog monitors the MCP server, OAuth gateway, and Funnel route and can relaunch a missing foreground Funnel window. Components that are already healthy are reused instead of duplicated.
 
 ### 4. Configure ChatGPT
 

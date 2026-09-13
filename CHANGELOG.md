@@ -24,6 +24,7 @@
 
 - Local Git inspection is now intentionally limited to `git` actions `status` and `diff`; GitHub remote operations remain the responsibility of GitHub/`gh` tooling.
 - `local_status` remains the single place for optional Web/SQLite feature status.
+- Tailscale Funnel now runs in a dedicated foreground console instead of persistent `--bg` mode. Startup safely converts this project's existing 443 mapping, refuses to overwrite conflicting 443 routes, and the watchdog relaunches the foreground Funnel if the mapping disappears.
 
 ## v0.5.0 (2026-09-12)
 
