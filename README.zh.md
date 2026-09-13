@@ -9,8 +9,8 @@ ChatGPT 负责推理；本服务负责限定工作区的文件读取、搜索、
 
 > 社区项目，不隶属于 OpenAI 或 Codex。
 >
-> MCP 端点没有应用层认证。请保持绑定 `127.0.0.1`，并通过私有 MCP 隧道连接；
-> 不要直接暴露到公网。
+> MCP 端点没有应用层认证。请保持绑定 `127.0.0.1`，并在前面使用可信入口。
+> 使用 Tailscale Funnel 时，只公开 `127.0.0.1:3334` 的 OAuth Gateway，绝不要把 MCP `3333` 端口直接暴露出去。
 
 ## 主要功能
 
@@ -29,15 +29,11 @@ ChatGPT 负责推理；本服务负责限定工作区的文件读取、搜索、
 
 - 核心服务需要 Node.js 20 或更高版本；推荐 Node.js 24
 - npm
-- ChatGPT 自定义连接器
+- 支持 Developer Mode 自定义 MCP 应用 / 连接器的 ChatGPT（可用性取决于套餐与工作区策略）
 - OpenAI Secure MCP Tunnel 路径使用 OpenAI `tunnel-client`；Funnel 路径使用 Tailscale
 - SQLite 工具需要支持 `node:sqlite` 的运行时（Node.js 22.5+；推荐 24+）
 
-Windows 下，`scripts/start-mcp.ps1` 按以下顺序寻找 Node：
-
-1. `%LOCALAPPDATA%\OpenAI\Codex\runtimes\cua_node` 中的 Codex 捆绑运行时
-2. `OPENCLAW_NODE_BIN`
-3. `PATH` 中的 `node`
+Windows 下，`scripts/start-mcp.ps1` 会先采用显式 PowerShell 参数，再读取环境变量覆盖值，然后读取 `config.json`。如果这些都没有指定运行时，才回退到 `%LOCALAPPDATA%\OpenAI\Codex\runtimes\cua_node` 中的 Codex 捆绑运行时，最后尝试 `PATH` 中的 `node`。相关设置为 `runtime.codexRuntimeRoot` / `CTM_CODEX_RUNTIME_ROOT` 与 `runtime.fallbackNodeBin` / `OPENCLAW_NODE_BIN`。
 
 ## Windows 快速开始
 
@@ -80,6 +76,8 @@ start-tailscale-mcp.cmd
 
 OpenAI 相关本地文件放在 `tunnel\openai`。启动时依次读取环境变量 `CONTROL_PLANE_API_KEY`、可选的 `tunnel\openai\control-plane-api-key.txt`，都没有时再用隐藏输入临时询问。
 
+首次配置 OpenAI Tunnel 还需要 ChatGPT 与 `tunnel-client` 共用的 OpenAI Tunnel ID；如果本地没有对应 profile，`init-windows.cmd` 会主动询问。运行用 Runtime API Key 应具备该 Tunnel 的 **Tunnels Read + Use** 权限，不要用 Tunnel 管理员密钥替代长期运行密钥。
+
 Tailscale 相关本地文件放在 `tunnel\tailscale`。初始化器会创建 OAuth 审批页使用的 `owner-password.txt`，OAuth 状态也保存在同一目录。
 
 ### 3. 启动 MCP 与隧道
@@ -100,14 +98,16 @@ start-tailscale-mcp.cmd
 
 正常冷启动时，主要可见控制台窗口为：
 
-- OpenAI 模式：**Codex MCP Server** + **OpenAI MCP Tunnel**。
-- Tailscale 模式：**Codex MCP Server** + **Tailscale OAuth Gateway** + **Tailscale Funnel**。
+- OpenAI 模式：**Codex MCP Server** + **OpenAI MCP Tunnel** + **OpenAI MCP Tunnel Watchdog**。
+- Tailscale 模式：**Codex MCP Server** + **Tailscale OAuth Gateway** + **Tailscale Funnel** + **Tailscale MCP Watchdog**。
 
 Tailscale Funnel 现在明确以前台方式运行。使用 Tailscale 连接期间请保持 Funnel 窗口开启；关闭窗口或按 `Ctrl+C` 会停止 HTTPS 443 的 Funnel 映射。watchdog 会监测 MCP、OAuth Gateway 和 Funnel 路由，并在 Funnel 缺失时重新拉起前台窗口；已健康运行的组件会直接复用，避免重复启动。
 
 ### 4. 配置 ChatGPT
 
-OpenAI Secure MCP Tunnel 使用 OpenAI 隧道连接，本地 MCP 端点选择 **No Authentication / 未授权**。
+在 ChatGPT 的 Developer Mode / Apps 中创建自定义 MCP 应用，并填写你所选择隧道链路的端点。具体可用性和界面名称可能随套餐、工作区策略变化，请以 [OpenAI 当前的 Developer Mode / MCP 应用说明](https://help.openai.com/zh-hans-cn/articles/12584461-developer-mode-and-full-mcp-connectors-in-chatgpt-beta) 为准。
+
+OpenAI Secure MCP Tunnel 在 ChatGPT 中选择 **Connection: Tunnel**，再选择对应 Tunnel，或粘贴初始化时使用的同一个 Tunnel ID。由于本项目的 MCP 服务本身没有应用层认证，如果界面继续询问 MCP 身份验证方式，则选择 **No Authentication / 无身份验证**。
 
 Tailscale Funnel 使用：
 
@@ -116,6 +116,8 @@ https://<你的机器名>.<你的tailnet>.ts.net/mcp
 ```
 
 使用 OAuth 自动发现。打开授权页后，输入本机 `tunnel\tailscale\owner-password.txt` 中的 Owner Password。
+
+Tailscale Funnel 属于公网入口。首次启用 Funnel 可能需要 tailnet 权限，并要求 MagicDNS / HTTPS 已启用；详见 [Tailscale Funnel 要求](https://tailscale.com/docs/features/tailscale-funnel)。
 
 两种模式下 MCP 服务本身都继续只绑定 `127.0.0.1`。
 
@@ -146,8 +148,7 @@ Copy-Item config.example.json config.json
 npm start
 ```
 
-环境变量和显式 PowerShell 参数优先于 `config.json`。没有配置文件时，会使用保守
-默认值。
+核心服务设置直接读取 `config.json` 与环境变量。`runtime`、`proxy`、`environment` 下的 Windows 启动器专用设置由 `scripts/start-mcp.ps1` 应用；环境变量和显式 PowerShell 参数优先于 `config.json` 中的对应值。没有配置文件时，会使用保守默认值。
 
 ## 连接路径
 
@@ -241,7 +242,6 @@ CTM_ACCESS_MODE=full
     "port": 3333,
     "allowedRoots": ["D:\\Projects"],
     "accessMode": "review",
-    "denyGlobs": ["**/.env", "**/key.txt"],
     "maxReadBytes": 200000,
     "maxOutputBytes": 200000,
     "maxSessions": 128
@@ -279,7 +279,7 @@ CTM_ACCESS_MODE=full
 | 主机/端口 | `HOST`、`PORT` | `127.0.0.1`、`3333` |
 | 允许根路径 | `CTM_ALLOWED_ROOTS` | 当前项目目录 |
 | 访问模式 | `CTM_ACCESS_MODE` | `review` |
-| 附加拒绝规则 | `CTM_DENY_GLOBS` | 内置规则 |
+| 拒绝规则覆盖 | `CTM_DENY_GLOBS` | 内置规则 |
 | 读取/输出上限 | `CTM_MAX_READ_BYTES`、`CTM_MAX_OUTPUT_BYTES` | `200000` |
 | MCP 会话上限 | `CTM_MAX_SESSIONS` | `128` |
 | Web 工具 | `CTM_WEB_TOOLS` | 关闭 |
@@ -291,6 +291,8 @@ CTM_ACCESS_MODE=full
 | 配置路径 | `CTM_CONFIG_PATH` | `<项目>/config.json` |
 
 高级运行时和代理选项见 `env.example`。
+
+`mcp.denyGlobs` 与 `CTM_DENY_GLOBS` 会**替换**内置 deny 列表，而不是在默认规则后追加。若要覆盖，请把仍需保留的全部默认规则与你新增的规则一起写入。
 
 不要把隧道运行密钥写入 `config.json`。OpenAI Tunnel 的
 `CONTROL_PLANE_API_KEY` 应放在当前环境，或 Git 已忽略的本地
@@ -362,6 +364,7 @@ append         create          overwrite       rename         delete
 - 允许根路径应尽量窄；不要使用整个系统盘或 `/`。
 - 除非确实需要更广的进程执行，否则保持 `review`。
 - 不要把端点直接暴露到公网。
+- Tailscale Funnel 属于公网入口；Funnel 必须指向 `127.0.0.1:3334` 的 OAuth Gateway，绝不要直接指向 MCP `3333`。
 - 不需要时保持 Web 和 SQLite 工具关闭。
 - 脱敏只是最后一道安全网，不是主要边界。
 - 每次确认文件或 SQLite 写入前都应审阅预览。
@@ -392,10 +395,9 @@ ZIP、生成 `SHA256SUMS.txt`，并自动创建 GitHub Release。
 
 ## 故障排查
 
-### ChatGPT 要求登录
+### 身份验证行为不符合预期
 
-新建连接器并选择 **No Authentication / 未授权**。旧连接器可能保留此前的 OAuth
-选择。
+OpenAI Secure MCP Tunnel 应创建或重新创建 MCP 应用并选择 **No Authentication / 无身份验证**。Tailscale Funnel 出现 OAuth 授权页则是正常行为：使用 OAuth 自动发现，并输入 `tunnel\tailscale\owner-password.txt` 中的 Owner Password。旧应用设置可能仍保留此前的身份验证方式。
 
 ### 路径超出允许范围
 

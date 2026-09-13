@@ -216,6 +216,33 @@ test("server exposes exactly the compact nine-tool surface", () => {
   }
 });
 
+test("runtime messages and live docs use the compact tool vocabulary", () => {
+  const liveSources = [
+    ["src/server.ts", readFileSync(join(repoRoot, "src", "server.ts"), "utf8")],
+    ["src/web.ts", readFileSync(join(repoRoot, "src", "web.ts"), "utf8")],
+    ["README.md", readFileSync(join(repoRoot, "README.md"), "utf8")],
+    ["README.zh.md", readFileSync(join(repoRoot, "README.zh.md"), "utf8")],
+    ["SECURITY.md", readFileSync(join(repoRoot, "SECURITY.md"), "utf8")],
+  ] as const;
+  const retiredNames = [
+    "preview" + "_edit",
+    "confirm" + "_edit",
+    "find" + "_files",
+    "project" + "_tree",
+    "sqlite" + "_schema",
+    "sqlite" + "_select",
+    "sqlite" + "_preview_change",
+    "sqlite" + "_confirm_change",
+    "web" + "_search",
+    "web" + "_fetch",
+  ];
+  for (const retired of retiredNames) {
+    for (const [name, source] of liveSources) {
+      assert.equal(source.includes(retired), false, `${name} must not reference retired tool name ${retired}`);
+    }
+  }
+});
+
 test("screenshot tool returns MCP image content and keeps Windows capture fallbacks", () => {
   const server = readFileSync(join(repoRoot, "src", "server.ts"), "utf8");
   const screenshot = readFileSync(join(repoRoot, "src", "screenshot.ts"), "utf8");

@@ -29,7 +29,7 @@ export function webStatus(config: Config) {
       methods: ["GET"],
       protocols: ["http", "https"],
       credentials: "not sent",
-      privateNetworkTargets: "blocked for web_fetch",
+      privateNetworkTargets: 'blocked for web(action="fetch")',
       redirects: "checked before each hop",
     },
   };
@@ -38,10 +38,10 @@ export function webStatus(config: Config) {
 export async function webSearch(config: Config, query: string, limit: number): Promise<SearchResult[]> {
   ensureWebToolsEnabled(config);
   if (config.searchProvider !== "searxng") {
-    throw new Error("web_search requires CTM_SEARCH_PROVIDER=searxng.");
+    throw new Error('web(action="search") requires CTM_SEARCH_PROVIDER=searxng.');
   }
   if (!config.searxngUrl) {
-    throw new Error("web_search requires CTM_SEARXNG_URL.");
+    throw new Error('web(action="search") requires CTM_SEARXNG_URL.');
   }
 
   const endpoint = makeSearxngSearchUrl(config.searxngUrl);
@@ -110,21 +110,21 @@ function makeSearxngSearchUrl(baseUrl: string): URL {
 
 async function assertPublicFetchUrl(inputUrl: string): Promise<URL> {
   const url = new URL(inputUrl);
-  if (!["http:", "https:"].includes(url.protocol)) throw new Error("web_fetch only supports http and https URLs.");
-  if (url.username || url.password) throw new Error("web_fetch URLs must not include credentials.");
+  if (!["http:", "https:"].includes(url.protocol)) throw new Error('web(action="fetch") only supports http and https URLs.');
+  if (url.username || url.password) throw new Error('web(action="fetch") URLs must not include credentials.');
 
   const host = url.hostname.toLowerCase();
-  if (!host || host === "localhost" || host.endsWith(".localhost")) throw new Error("web_fetch cannot access localhost.");
+  if (!host || host === "localhost" || host.endsWith(".localhost")) throw new Error('web(action="fetch") cannot access localhost.');
 
   if (isIP(host)) {
-    if (isPrivateAddress(host)) throw new Error("web_fetch cannot access private or local network addresses.");
+    if (isPrivateAddress(host)) throw new Error('web(action="fetch") cannot access private or local network addresses.');
     return url;
   }
 
   const addresses = await lookup(host, { all: true, verbatim: false });
   if (addresses.length === 0) throw new Error(`Unable to resolve host: ${host}`);
   if (addresses.some((entry) => isPrivateAddress(entry.address))) {
-    throw new Error("web_fetch cannot access hosts that resolve to private or local network addresses.");
+    throw new Error('web(action="fetch") cannot access hosts that resolve to private or local network addresses.');
   }
   return url;
 }

@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+### Fixes
+
+- Updated runtime validation and web error messages to use the compact action-based tool names (`edit`, `sqlite`, `web`) instead of retired public tool names.
+- Added a regression test that rejects retired tool vocabulary in runtime sources and current README/security documentation.
+
+### Documentation
+
+- Corrected English and Chinese setup guidance for ChatGPT MCP apps, OpenAI Tunnel IDs/runtime permissions, Tailscale Funnel OAuth/public-ingress behavior, visible watchdog windows, and Windows Node/config precedence.
+- Clarified that `mcp.denyGlobs` / `CTM_DENY_GLOBS` replace the built-in deny list rather than append to it, and removed the unsafe partial override example.
+- Updated `SECURITY.md` to the current nine-tool action-based interface.
+
+
 ## v0.6.0 (2026-09-13)
 
 ### Improvements

@@ -12,8 +12,8 @@ execution without a shell, and optional web and SQLite tools.
 > Community project; not affiliated with OpenAI or Codex.
 >
 > The MCP endpoint has no application-layer authentication. Keep it bound to
-> `127.0.0.1` and connect through a private MCP tunnel. Do not expose it directly
-> to the public internet.
+> `127.0.0.1` and place a trusted ingress in front of it. With Tailscale Funnel,
+> expose only the OAuth gateway on `127.0.0.1:3334`, never MCP port `3333` directly.
 
 ## Highlights
 
@@ -32,16 +32,12 @@ execution without a shell, and optional web and SQLite tools.
 
 - Node.js 20 or newer for the core server; Node.js 24 is recommended
 - npm
-- A ChatGPT custom connector
+- ChatGPT access that supports custom MCP apps / connectors in Developer Mode (availability depends on plan and workspace policy)
 - OpenAI `tunnel-client` for the OpenAI Secure MCP Tunnel path, or Tailscale for the Funnel path
 - SQLite tools require a runtime with `node:sqlite` support (Node.js 22.5+;
   Node.js 24+ recommended)
 
-On Windows, `scripts/start-mcp.ps1` looks for Node in this order:
-
-1. Codex bundled runtime under `%LOCALAPPDATA%\OpenAI\Codex\runtimes\cua_node`
-2. `OPENCLAW_NODE_BIN`
-3. `node` on `PATH`
+On Windows, `scripts/start-mcp.ps1` resolves Node from explicit PowerShell parameters first, then environment overrides, then `config.json`. If none of those select a runtime, it falls back to the Codex bundled runtime under `%LOCALAPPDATA%\OpenAI\Codex\runtimes\cua_node`, then `node` on `PATH`. Relevant settings are `runtime.codexRuntimeRoot` / `CTM_CODEX_RUNTIME_ROOT` and `runtime.fallbackNodeBin` / `OPENCLAW_NODE_BIN`.
 
 ## Windows quick start
 
@@ -84,6 +80,8 @@ You can run `init-windows.cmd` again later and configure the other tunnel too; t
 
 OpenAI-specific local files live under `tunnel\openai`. The launcher reads `CONTROL_PLANE_API_KEY` from the environment, then `tunnel\openai\control-plane-api-key.txt` when present, or asks for it with a hidden prompt.
 
+First-time OpenAI setup also needs the OpenAI Tunnel ID used by ChatGPT and `tunnel-client`; `init-windows.cmd` asks for it when no matching local profile exists. The runtime API key should have Tunnels **Read + Use** permission for that tunnel; do not substitute a tunnel-admin key for the long-running runtime.
+
 Tailscale-specific local files live under `tunnel\tailscale`. The initializer creates `owner-password.txt` for the local OAuth approval page and keeps OAuth state in the same directory.
 
 ### 3. Start MCP and your tunnel
@@ -104,14 +102,16 @@ Each launcher starts the MCP server when needed, then starts only its own tunnel
 
 On a normal cold start, the main visible console windows are:
 
-- OpenAI mode: **Codex MCP Server** + **OpenAI MCP Tunnel**.
-- Tailscale mode: **Codex MCP Server** + **Tailscale OAuth Gateway** + **Tailscale Funnel**.
+- OpenAI mode: **Codex MCP Server** + **OpenAI MCP Tunnel** + **OpenAI MCP Tunnel Watchdog**.
+- Tailscale mode: **Codex MCP Server** + **Tailscale OAuth Gateway** + **Tailscale Funnel** + **Tailscale MCP Watchdog**.
 
 The Tailscale Funnel deliberately runs in the foreground. Keep its window open while using the Tailscale connection; closing it or pressing `Ctrl+C` stops the Funnel mapping on HTTPS 443. The watchdog monitors the MCP server, OAuth gateway, and Funnel route and can relaunch a missing foreground Funnel window. Components that are already healthy are reused instead of duplicated.
 
 ### 4. Configure ChatGPT
 
-For OpenAI Secure MCP Tunnel, configure the connector through the OpenAI tunnel and use **No Authentication** for the local MCP endpoint.
+Create a custom MCP app in ChatGPT Developer Mode / Apps and provide the endpoint for the tunnel path you selected. Product availability and exact UI labels can vary by plan and workspace policy; see [OpenAI's current Developer Mode / MCP apps documentation](https://help.openai.com/en/articles/12584461).
+
+For OpenAI Secure MCP Tunnel, choose **Connection: Tunnel** in ChatGPT and select the tunnel or paste the same Tunnel ID used during initialization. Because this MCP server itself has no application-layer authentication, choose **No Authentication** if the UI asks for MCP authentication.
 
 For Tailscale Funnel, use:
 
@@ -120,6 +120,8 @@ https://<your-machine>.<your-tailnet>.ts.net/mcp
 ```
 
 Use OAuth discovery. When the approval page opens, enter the local Owner Password from `tunnel\tailscale\owner-password.txt`.
+
+Tailscale Funnel is public internet ingress. First-time Funnel use can require tailnet permission plus MagicDNS/HTTPS enablement; see [Tailscale's Funnel requirements](https://tailscale.com/docs/features/tailscale-funnel).
 
 The MCP server itself remains bound to `127.0.0.1` in both modes.
 
@@ -150,8 +152,7 @@ Edit `config.json`, then start:
 npm start
 ```
 
-Environment variables and explicit PowerShell parameters override
-`config.json`. Without a config file, conservative defaults are used.
+Core server settings are read from `config.json` and environment variables. Windows launcher-only settings under `runtime`, `proxy`, and `environment` are applied by `scripts/start-mcp.ps1`. Environment variables and explicit PowerShell parameters take precedence over matching `config.json` values. Without a config file, conservative defaults are used.
 
 ## Connection path
 
@@ -251,7 +252,6 @@ or copied by the user, and ignored by Git.
     "port": 3333,
     "allowedRoots": ["D:\\Projects"],
     "accessMode": "review",
-    "denyGlobs": ["**/.env", "**/key.txt"],
     "maxReadBytes": 200000,
     "maxOutputBytes": 200000,
     "maxSessions": 128
@@ -289,7 +289,7 @@ Common environment overrides:
 | Host / port | `HOST`, `PORT` | `127.0.0.1`, `3333` |
 | Allowed roots | `CTM_ALLOWED_ROOTS` | current project directory |
 | Access mode | `CTM_ACCESS_MODE` | `review` |
-| Extra deny rules | `CTM_DENY_GLOBS` | built-in deny list |
+| Deny rules override | `CTM_DENY_GLOBS` | built-in deny list |
 | Read/output caps | `CTM_MAX_READ_BYTES`, `CTM_MAX_OUTPUT_BYTES` | `200000` |
 | MCP session cap | `CTM_MAX_SESSIONS` | `128` |
 | Web tools | `CTM_WEB_TOOLS` | disabled |
@@ -301,6 +301,8 @@ Common environment overrides:
 | Config path | `CTM_CONFIG_PATH` | `<project>/config.json` |
 
 See `env.example` for advanced runtime and proxy overrides.
+
+`mcp.denyGlobs` and `CTM_DENY_GLOBS` **replace** the built-in deny list; they do not append to it. If you override them, include every default pattern you still want protected plus your additional rules.
 
 Do not put tunnel runtime keys in `config.json`. For OpenAI Tunnel, keep
 `CONTROL_PLANE_API_KEY` in the current environment or the Git-ignored local
@@ -374,6 +376,7 @@ transactional, so keep related edits small and review the entire preview.
 - Use narrow allowed roots; never use an entire system drive or `/`.
 - Keep `review` mode unless broader process execution is required.
 - Do not expose the endpoint directly to the internet.
+- Tailscale Funnel is public internet ingress; keep Funnel pointed at the OAuth gateway on `127.0.0.1:3334`, never directly at MCP port `3333`.
 - Keep web and SQLite tools disabled unless needed.
 - Treat redaction as a final safety net, not the primary boundary.
 - Review every edit and SQLite preview before confirming.
@@ -406,10 +409,9 @@ generates `SHA256SUMS.txt`, and creates the GitHub Release.
 
 ## Troubleshooting
 
-### ChatGPT asks for login
+### Authentication behavior is unexpected
 
-Create a new connector and choose **No Authentication**. Old connector settings
-may retain a previous OAuth choice.
+For OpenAI Secure MCP Tunnel, create or recreate the MCP app with **No Authentication**. For Tailscale Funnel, an OAuth authorization prompt is expected: use OAuth discovery and enter the Owner Password from `tunnel\tailscale\owner-password.txt`. Old app settings may retain a previous authentication choice.
 
 ### Path is outside allowed roots
 

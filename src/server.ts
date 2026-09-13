@@ -253,7 +253,7 @@ function assertMaxBytes(label: string, value: string, maxBytes: number): void {
 
 function assertPreviewEditPayload(changes: unknown[]): void {
   if (changes.length > payloadLimits.previewEditMaxChanges) {
-    throw new Error(`preview_edit supports at most ${payloadLimits.previewEditMaxChanges} changes per call. Split the batch.`);
+    throw new Error(`edit(action="preview") supports at most ${payloadLimits.previewEditMaxChanges} changes per call. Split the batch.`);
   }
   let totalBytes = 0;
   for (const [index, raw] of changes.entries()) {
@@ -264,17 +264,17 @@ function assertPreviewEditPayload(changes: unknown[]): void {
       const size = byteLength(value);
       totalBytes += size;
       if (size > payloadLimits.previewEditMaxTextBytesPerChange) {
-        throw new Error(`preview_edit changes[${index}].${field} is too large (${size} bytes). Split it into smaller edits.`);
+        throw new Error(`edit(action="preview") changes[${index}].${field} is too large (${size} bytes). Split it into smaller edits.`);
       }
     }
   }
   if (totalBytes > payloadLimits.previewEditMaxTotalTextBytes) {
-    throw new Error(`preview_edit payload is too large (${totalBytes} bytes). Split it into smaller tool calls.`);
+    throw new Error(`edit(action="preview") payload is too large (${totalBytes} bytes). Split it into smaller tool calls.`);
   }
 }
 
 function assertSqliteChangePayload(change: unknown): void {
-  assertMaxBytes("sqlite_preview_change payload", JSON.stringify(change), payloadLimits.sqliteChangeMaxPayloadBytes);
+  assertMaxBytes('sqlite(action="preview") payload', JSON.stringify(change), payloadLimits.sqliteChangeMaxPayloadBytes);
 }
 
 function assertEditChangePaths(workspaceId: string, changes: Change[]): void {
@@ -1058,7 +1058,7 @@ function normalizeToolPath(path: string): string {
   return normalized;
 }
 
-// --- find_files helpers ---
+// --- files(action="find") helpers ---
 
 async function findFilesByGlob(
   workspaceRoot: string,
@@ -1100,7 +1100,7 @@ async function findFilesByGlob(
   return results.slice(0, maxResults);
 }
 
-// --- project_tree helpers ---
+// --- files(action="list") recursive helpers ---
 
 async function buildProjectTree(
   root: string,
