@@ -176,13 +176,9 @@ Health endpoint:
 http://127.0.0.1:3333/healthz
 ```
 
-A raw GET request to `/mcp` may return `No valid MCP session`; that is normal
-until an MCP session has been initialized.
+The Streamable HTTP endpoint is stateless: each request gets a fresh transport and the server does not rely on an in-memory `Mcp-Session-Id` registry. This means older ChatGPT windows can resume after the MCP process restarts instead of getting stranded on an unknown server-side session.
 
-Initialized MCP sessions do not expire merely because a ChatGPT window is idle.
-Memory is bounded with an LRU session cap (`mcp.maxSessions`, default `128`):
-only the least-recently-used sessions are closed when the cap is exceeded. A
-server restart still resets all sessions.
+`mcp.maxSessions` / `CTM_MAX_SESSIONS` are still accepted for backward-compatible configuration parsing, but the stateless HTTP transport does not use that limit.
 
 ## Tools
 
@@ -393,7 +389,7 @@ npm test
 npm run check
 ```
 
-The test suite covers configuration precedence, session LRU behavior, glob
+The test suite covers configuration precedence, stateless MCP transport behavior, glob
 matching, secret redaction, optional SQLite loading, repository/version
 consistency, and CI/CD gates.
 

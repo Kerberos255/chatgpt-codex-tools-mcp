@@ -262,3 +262,13 @@ test("all nine MCP tools declare output schemas", () => {
     assert.equal(server.includes(name), true, `${name} must remain wired`);
   }
 });
+
+
+test("MCP HTTP transport stays stateless across server restarts", () => {
+  const server = readFileSync(join(repoRoot, "src", "server.ts"), "utf8");
+  assert.match(server, /sessionIdGenerator:\s*undefined/);
+  assert.match(server, /res\.on\(["']close["'][\s\S]*transport\.close\(\)/);
+  for (const statefulMarker of ["SessionRegistry", "isInitializeRequest", "randomUUID", "Unknown MCP session"]) {
+    assert.equal(server.includes(statefulMarker), false, `${statefulMarker} must not remain in the HTTP transport path`);
+  }
+});

@@ -172,12 +172,9 @@ ChatGPT → Tailscale Funnel HTTPS 443 → OAuth gateway 127.0.0.1:3334
 http://127.0.0.1:3333/healthz
 ```
 
-直接 GET `/mcp` 可能返回 `No valid MCP session`；在 MCP 会话尚未初始化时属于
-正常现象。
+Streamable HTTP 端点现在采用无状态模式：每个请求都会创建新的 transport，服务端不再依赖内存中的 `Mcp-Session-Id` 注册表。因此 MCP 进程重启后，旧 ChatGPT 窗口也可以继续恢复调用，不会再被失效的服务端会话卡住。
 
-已初始化的 MCP 会话不会仅因为 ChatGPT 窗口长时间闲置而过期。服务通过 LRU 会话
-上限（`mcp.maxSessions`，默认 `128`）限制内存：只有超过上限时，才关闭最久未使用
-的会话。服务进程重启仍会重置全部会话。
+`mcp.maxSessions` / `CTM_MAX_SESSIONS` 仍会为了旧配置兼容而被接受，但无状态 HTTP transport 不再使用这个上限。
 
 ## 工具目录
 
@@ -381,7 +378,7 @@ npm test
 npm run check
 ```
 
-测试覆盖配置优先级、会话 LRU 行为、glob 匹配、敏感值脱敏、可选 SQLite 加载、
+测试覆盖配置优先级、无状态 MCP transport 行为、glob 匹配、敏感值脱敏、可选 SQLite 加载、
 版本/仓库一致性和 CI/CD 闸门。
 
 ## CI 与 Release

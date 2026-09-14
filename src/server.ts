@@ -1,11 +1,9 @@
-import { randomUUID } from "node:crypto";
 import { readdir, readFile, stat } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { join, relative, sep, resolve as pathResolve } from "node:path";
 import express from "express";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import * as z from "zod/v4";
 import { loadConfig } from "./config.js";
 import { createGlobMatcher, splitGlobPatterns, type GlobMatcher } from "./globs.js";
@@ -14,7 +12,6 @@ import { EditStore, type Change, previewChanges, applyChanges } from "./edit-sto
 import { ManagedProcessStore, type ManagedProcessSnapshot } from "./managed-processes.js";
 import { assertProcessAllowed, runProcess, type ProcessResult } from "./process-runner.js";
 import { redactText, redactValue } from "./redaction.js";
-import { SessionRegistry } from "./session-registry.js";
 import {
   sqliteSchema,
   sqliteSelect,
@@ -1175,42 +1172,20 @@ app.use(express.json({ limit: "4mb" }));
 app.use(express.urlencoded({ extended: false }));
 app.get("/healthz", (_req, res) => res.json({ ok: true, name: "chatgpt-codex-tools-mcp" }));
 
-// Keep MCP sessions alive across long-idle ChatGPT windows. Memory remains bounded by
-// evicting only the least-recently-used sessions when the configured cap is exceeded.
-const transports = new SessionRegistry<StreamableHTTPServerTransport>(config.maxSessions);
-
+// Stateless Streamable HTTP keeps ChatGPT windows independent from in-memory MCP
+// session IDs. A fresh transport/server pair per request also prevents request-ID
+// collisions between clients and survives MCP process restarts without stale sessions.
 app.all("/mcp", async (req, res) => {
-  const sessionId = req.header("mcp-session-id");
-  const initializeRequest = req.method === "POST" && isInitializeRequest(req.body);
+  const transport = new StreamableHTTPServerTransport({
+    sessionIdGenerator: undefined,
+  });
+
+  res.on("close", () => {
+    void transport.close();
+  });
 
   try {
-    let transport: StreamableHTTPServerTransport | undefined;
-    if (sessionId) {
-      transport = transports.get(sessionId);
-      if (!transport) {
-        res.status(404).json({ error: "Unknown MCP session" });
-        return;
-      }
-    } else if (initializeRequest) {
-      transport = new StreamableHTTPServerTransport({
-        sessionIdGenerator: () => randomUUID(),
-        onsessioninitialized: (newSessionId) => {
-          if (!transport) return;
-          const evicted = transports.set(newSessionId, transport);
-          if (evicted.length > 0) {
-            console.log(`MCP session LRU: evicted ${evicted.length} old session(s); cap=${config.maxSessions}`);
-          }
-        },
-      });
-      transport.onclose = () => {
-        if (transport?.sessionId) transports.delete(transport.sessionId);
-      };
-      await createMcpServer().connect(transport);
-    } else {
-      res.status(400).json({ error: "No valid MCP session" });
-      return;
-    }
-
+    await createMcpServer().connect(transport);
     await transport.handleRequest(req, res, req.body);
   } catch (error) {
     if (!res.headersSent) {

@@ -1,9 +1,11 @@
 # Changelog
 
-## Unreleased
+## v0.6.1 (2026-09-14)
 
 ### Fixes
 
+- Switched Streamable HTTP to stateless transports, so stale `Mcp-Session-Id` values no longer strand older ChatGPT windows after the MCP process restarts.
+- Added a regression test that keeps the HTTP transport stateless and rejects the old in-memory session path.
 - Updated runtime validation and web error messages to use the compact action-based tool names (`edit`, `sqlite`, `web`) instead of retired public tool names.
 - Added a regression test that rejects retired tool vocabulary in runtime sources and current README/security documentation.
 
