@@ -37,7 +37,7 @@ execution without a shell, and optional web and SQLite tools.
 - SQLite tools require a runtime with `node:sqlite` support (Node.js 22.5+;
   Node.js 24+ recommended)
 
-On Windows, `scripts/start-mcp.ps1` resolves Node from explicit PowerShell parameters first, then environment overrides, then `config.json`. If none of those select a runtime, it falls back to the Codex bundled runtime under `%LOCALAPPDATA%\OpenAI\Codex\runtimes\cua_node`, then `node` on `PATH`. Relevant settings are `runtime.codexRuntimeRoot` / `CTM_CODEX_RUNTIME_ROOT` and `runtime.fallbackNodeBin` / `OPENCLAW_NODE_BIN`.
+On Windows, `scripts/start-mcp.ps1` resolves Node from explicit PowerShell parameters first, then environment overrides, then `config.json`. If none of those select a runtime, it falls back to the Codex bundled runtime under `%LOCALAPPDATA%\OpenAI\Codex\runtimes\cua_node`, then `node` on `PATH`. Relevant settings are `runtime.codexRuntimeRoot` / `CTM_CODEX_RUNTIME_ROOT` and `runtime.fallbackNodeBin` / `CTM_FALLBACK_NODE_BIN`.
 
 ## Windows quick start
 

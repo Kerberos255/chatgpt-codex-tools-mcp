@@ -141,7 +141,7 @@ if (-not $CodexRuntimeRoot -and $env:LOCALAPPDATA) {
 }
 
 if (-not $FallbackNodeBin) {
-  $FallbackNodeBin = Get-Setting -ConfigValue (Get-ConfigProperty $runtimeConfig "fallbackNodeBin") -EnvName "OPENCLAW_NODE_BIN" -Fallback ""
+  $FallbackNodeBin = Get-Setting -ConfigValue (Get-ConfigProperty $runtimeConfig "fallbackNodeBin") -EnvName "CTM_FALLBACK_NODE_BIN" -Fallback ""
 }
 
 Set-EnvDefault -Name "CTM_NPM_CACHE" -Value (Get-ConfigProperty $runtimeConfig "npmCache")
@@ -189,7 +189,7 @@ if ($pathNode) {
 
 $nodeExe = $nodeCandidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
 if (-not $nodeExe) {
-  throw "No usable node.exe found. Install Node.js or set runtime.fallbackNodeBin / OPENCLAW_NODE_BIN."
+  throw "No usable node.exe found. Install Node.js or set runtime.fallbackNodeBin / CTM_FALLBACK_NODE_BIN."
 }
 
 $serverJs = Join-Path $projectRoot "dist\server.js"

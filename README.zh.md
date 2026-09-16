@@ -33,7 +33,7 @@ ChatGPT 负责推理；本服务负责限定工作区的文件读取、搜索、
 - OpenAI Secure MCP Tunnel 路径使用 OpenAI `tunnel-client`；Funnel 路径使用 Tailscale
 - SQLite 工具需要支持 `node:sqlite` 的运行时（Node.js 22.5+；推荐 24+）
 
-Windows 下，`scripts/start-mcp.ps1` 会先采用显式 PowerShell 参数，再读取环境变量覆盖值，然后读取 `config.json`。如果这些都没有指定运行时，才回退到 `%LOCALAPPDATA%\OpenAI\Codex\runtimes\cua_node` 中的 Codex 捆绑运行时，最后尝试 `PATH` 中的 `node`。相关设置为 `runtime.codexRuntimeRoot` / `CTM_CODEX_RUNTIME_ROOT` 与 `runtime.fallbackNodeBin` / `OPENCLAW_NODE_BIN`。
+Windows 下，`scripts/start-mcp.ps1` 会先采用显式 PowerShell 参数，再读取环境变量覆盖值，然后读取 `config.json`。如果这些都没有指定运行时，才回退到 `%LOCALAPPDATA%\OpenAI\Codex\runtimes\cua_node` 中的 Codex 捆绑运行时，最后尝试 `PATH` 中的 `node`。相关设置为 `runtime.codexRuntimeRoot` / `CTM_CODEX_RUNTIME_ROOT` 与 `runtime.fallbackNodeBin` / `CTM_FALLBACK_NODE_BIN`。
 
 ## Windows 快速开始
 

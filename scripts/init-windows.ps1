@@ -33,8 +33,8 @@ function Find-NodeExe {
         ForEach-Object { Join-Path $_.FullName "bin\node.exe" }
     }
   }
-  if ($env:OPENCLAW_NODE_BIN) {
-    $candidates += Join-Path $env:OPENCLAW_NODE_BIN "node.exe"
+  if ($env:CTM_FALLBACK_NODE_BIN) {
+    $candidates += Join-Path $env:CTM_FALLBACK_NODE_BIN "node.exe"
   }
   $pathNode = Get-Command node.exe -ErrorAction SilentlyContinue
   if ($pathNode) { $candidates += $pathNode.Source }

@@ -130,7 +130,7 @@
 
 - Added `config.json` support for MCP launcher settings.
 - Moved local MCP launcher defaults out of `start-mcp.cmd`.
-- Removed obsolete MCP launcher variables for the old OpenClaw cron-specific tools.
+- Removed obsolete MCP launcher variables for the old application-specific cron tools.
 
 ## v0.4.2 (2026-07-01)
 
@@ -163,7 +163,7 @@
 
 ### ⚠️ Breaking changes
 
-- **Removed OpenClaw cron-specific tools**: `cron_list_jobs`, `cron_get_job`, `cron_preview_update_job`, and `cron_confirm_update_job`. Use generic SQLite tools instead.
+- **Removed application-specific cron tools**: `cron_list_jobs`, `cron_get_job`, `cron_preview_update_job`, and `cron_confirm_update_job`. Use generic SQLite tools instead.
 - **Replaced `filesystem` edit API** with a new generic `preview_edit`/`confirm_edit` pair that supports 9 edit types in multi-file batches.
 - **SQLite tools restructured**: the old `codex_sqlite_store_status`, `codex_sqlite_store_schema`, `codex_sqlite_store_select`, `codex_sqlite_preview_change`, `codex_sqlite_confirm_change` have been renamed to `sqlite_status`, `sqlite_schema`, `sqlite_select`, `sqlite_preview_change`, `sqlite_confirm_change`. The UI labeling and category prefixes have been simplified.
 
@@ -197,7 +197,7 @@
 ### 🛠 Internal changes
 
 - **Deleted files**:
-  - `src/sqlite-tools.ts` fully rewritten — removed `CronStore`, `openclawCronList`, `openclawCronCreate`, `codex_` prefix mapping.
+  - `src/sqlite-tools.ts` fully rewritten — removed legacy application-specific cron helpers and `codex_` prefix mapping.
 - **New file**:
   - `src/edit-store.ts` — generic multi-file edit store with 9 edit types, preview + async apply logic.
 - **Modified files**:
@@ -205,17 +205,17 @@
   - `src/config.ts`: Removed no-longer-used config fields if any.
   - `README.md`, `README.zh.md`: Full documentation rewrite for v0.4.0.
   - `CHANGELOG.md`: This file.
-  - `env.example`, `.env.example`: Removed OpenClaw cron config; added CTM_SQLITE_TOOLS/ALLOWED_DBS examples.
+  - `env.example`, `.env.example`: Removed application-specific cron config; added CTM_SQLITE_TOOLS/ALLOWED_DBS examples.
 
 ### 🗑 Removed
 
-- **cron tools** (`cron_list_jobs`, `cron_get_job`, `cron_preview_update_job`, `cron_confirm_update_job`): These were tightly coupled to the OpenClaw cron format. Users who need cron data can use the generic SQLite tools instead.
+- **cron tools** (`cron_list_jobs`, `cron_get_job`, `cron_preview_update_job`, `cron_confirm_update_job`): These were tightly coupled to the previous application-specific cron format. Users who need cron data can use the generic SQLite tools instead.
 - **`codex_` prefix**: All tools use `snake_case` without prefix, matching standard MCP naming conventions.
 
 ## v0.3.0
 
 - Added SQLite tools (`codex_sqlite_store_*`): read schema and select from an allowlisted SQLite database.
-- Added OpenClaw cron tools (`cron_list_jobs`, `cron_get_job`, `cron_preview_update_job`, `cron_confirm_update_job`) backed by an allowlisted SQLite database.
+- Added application-specific cron tools (`cron_list_jobs`, `cron_get_job`, `cron_preview_update_job`, `cron_confirm_update_job`) backed by an allowlisted SQLite database.
 - Added config-driven optional SQLite/cron feature gating (`CTM_SQLITE_TOOLS`, `CTM_SQLITE_ALLOWED_DBS`, `CTM_CRON_TOOLS`, `CTM_CRON_DB_PATH`).
 - Added best-effort secret redaction on tool output (sensitive values matched against `CTM_SECRET_PATTERNS` or common patterns).
 - v0.3.0 SQLite tools used `codex_sqlite_store_` prefix.
