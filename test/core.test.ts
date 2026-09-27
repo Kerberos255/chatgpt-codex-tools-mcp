@@ -135,8 +135,6 @@ test("Windows tunnel bootstrap keeps public entry points minimal", () => {
   const gitignore = readFileSync(join(repoRoot, ".gitignore"), "utf8");
   const initializer = readFileSync(join(repoRoot, "scripts", "init-windows.ps1"), "utf8");
   const funnelConfigurator = readFileSync(join(repoRoot, "scripts", "configure-tailscale-funnel.ps1"), "utf8");
-  const tailscaleWatchdog = readFileSync(join(repoRoot, "scripts", "watch-tailscale-mcp.ps1"), "utf8");
-  const openaiWatchdog = readFileSync(join(repoRoot, "scripts", "watch-openai-tunnel.ps1"), "utf8");
   const openaiStarter = readFileSync(join(repoRoot, "scripts", "start-openai-tunnel.ps1"), "utf8");
   const releaseBuilder = readFileSync(join(repoRoot, "scripts", "build-release.ps1"), "utf8");
   const tailscaleGateway = readFileSync(join(repoRoot, "src", "tailscale-gateway.ts"), "utf8");
@@ -144,6 +142,8 @@ test("Windows tunnel bootstrap keeps public entry points minimal", () => {
   assert.equal(gitignore.split(/\r?\n/).includes("/tunnel/"), true);
   assert.equal(gitignore.split(/\r?\n/).includes("start-openai-mcp.cmd"), true);
   assert.equal(gitignore.split(/\r?\n/).includes("start-tailscale-mcp.cmd"), true);
+  assert.equal(initializer.includes('[ValidateSet("review", "full")]'), true);
+  assert.equal(initializer.includes("accessMode = $AccessMode"), true);
   assert.equal(initializer.includes('[ValidateSet("OpenAI", "Tailscale", "Both")]'), true);
   assert.equal(initializer.includes("SHA256SUMS.txt"), true);
   assert.equal(initializer.includes("Copy-OpenAITunnelBundle"), true);
@@ -156,18 +156,8 @@ test("Windows tunnel bootstrap keeps public entry points minimal", () => {
   assert.equal(funnelConfigurator.includes('& $tailscale funnel --yes --tls-terminated-tcp=443 tcp://127.0.0.1:3334'), true);
   assert.equal(funnelConfigurator.includes("refusing to overwrite it"), true);
   assert.equal(initializer.includes('start "Tailscale Funnel" powershell.exe'), true);
-  assert.equal(initializer.includes("watch-tailscale-mcp.ps1"), true);
-  assert.equal(initializer.includes("watch-openai-tunnel.ps1"), true);
-  assert.equal(tailscaleWatchdog.includes("IntervalSeconds = 300"), true);
-  assert.equal(tailscaleWatchdog.includes('TCPForward -eq "127.0.0.1:3334"'), true);
-  assert.equal(tailscaleWatchdog.includes('"conflict" { Write-WatchLog'), true);
-  assert.equal(tailscaleWatchdog.includes("starting a foreground Funnel window"), true);
-  assert.equal(tailscaleWatchdog.includes('Start-Process -FilePath "powershell.exe"'), true);
-  assert.equal(openaiWatchdog.includes("IntervalSeconds = 60"), true);
-  assert.equal(openaiWatchdog.includes("DeadFailureThreshold = 3"), true);
-  assert.equal(openaiWatchdog.includes("if ($healthOk)"), true);
-  assert.equal(openaiWatchdog.includes("if (-not $readyOk)"), true);
-  assert.equal(openaiWatchdog.includes("Stop-ManagedTunnelClients $clientRoot"), true);
+  assert.equal(initializer.includes("watch-tailscale-mcp.ps1"), false);
+  assert.equal(initializer.includes("watch-openai-tunnel.ps1"), false);
   assert.equal(openaiStarter.includes("pending-update"), true);
   assert.equal(tailscaleGateway.includes("tunnel/tailscale/owner-password.txt"), true);
   for (const retired of ["start-all.cmd", "start-mcp.cmd", "start-tunnel.cmd"]) {

@@ -1,5 +1,7 @@
 param(
   [string]$AllowedRoots = "",
+  [ValidateSet("review", "full")]
+  [string]$AccessMode = "",
   [ValidateSet("OpenAI", "Tailscale", "Both")]
   [string]$Tunnel = "",
   [int]$Port = 3333,
@@ -191,7 +193,6 @@ if errorlevel 1 (
 )
 
 :mcp_ready
-start "OpenAI MCP Tunnel Watchdog" powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\scripts\watch-openai-tunnel.ps1"
 curl.exe -fsS "http://$HealthAddr/readyz" >nul 2>nul
 if not errorlevel 1 (
   echo OpenAI MCP Tunnel is already ready.
@@ -270,7 +271,6 @@ if errorlevel 1 (
 )
 :gateway_ready
 start "Tailscale Funnel" powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\scripts\configure-tailscale-funnel.ps1"
-start "Tailscale MCP Watchdog" powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\scripts\watch-tailscale-mcp.ps1"
 exit /b 0
 
 "@
@@ -296,6 +296,29 @@ if (-not $AllowedRoots) {
   $AllowedRoots = Read-Host "Allowed roots, comma-separated, for example D:\Projects"
 }
 if (-not $AllowedRoots) { throw "Allowed roots cannot be empty." }
+
+Write-Step "Configure access mode"
+if (-not $AccessMode -and (Test-Path -LiteralPath $configPath)) {
+  try {
+    $existingConfig = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
+    if ($existingConfig.mcp.accessMode -in @("review", "full")) {
+      $AccessMode = [string]$existingConfig.mcp.accessMode
+      Write-Host "Using access mode from existing config.json: $AccessMode"
+    }
+  } catch {
+    Write-Warning "Existing config.json could not be parsed; access mode will be requested."
+  }
+}
+if (-not $AccessMode) {
+  Write-Host "1. review - limited inspection/test process allowlist (recommended default)"
+  Write-Host "2. full   - broader structured executable access; shells remain blocked"
+  $accessChoice = Read-Host "Choose access mode [1/2]"
+  switch ($accessChoice) {
+    "1" { $AccessMode = "review" }
+    "2" { $AccessMode = "full" }
+    default { throw "Invalid access mode selection." }
+  }
+}
 
 if (-not $Tunnel) {
   Write-Host "1. OpenAI Secure MCP Tunnel"
@@ -326,7 +349,7 @@ $configObject = [ordered]@{
     host = "127.0.0.1"
     port = $Port
     allowedRoots = @($allowedRootList)
-    accessMode = "review"
+    accessMode = $AccessMode
     maxReadBytes = 200000
     maxOutputBytes = 200000
     maxSessions = 128

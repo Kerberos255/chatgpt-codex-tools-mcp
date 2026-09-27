@@ -57,6 +57,7 @@ init-windows.cmd
 初始化器会：
 
 - 询问较窄的允许工作区根路径，例如 `D:\Projects`
+- 首次配置时询问使用 `review` 还是 `full` 访问模式
 - 安装 npm 依赖并构建 `dist/server.js`
 - 让你选择 **OpenAI Secure MCP Tunnel**、**Tailscale Funnel** 或 **两者都配置**
 - 首次配置时创建被 Git 忽略的本地 `config.json`；已有配置默认保留，除非显式强制覆盖
@@ -98,10 +99,10 @@ start-tailscale-mcp.cmd
 
 正常冷启动时，主要可见控制台窗口为：
 
-- OpenAI 模式：**Codex MCP Server** + **OpenAI MCP Tunnel** + **OpenAI MCP Tunnel Watchdog**。
-- Tailscale 模式：**Codex MCP Server** + **Tailscale OAuth Gateway** + **Tailscale Funnel** + **Tailscale MCP Watchdog**。
+- OpenAI 模式：**Codex MCP Server** + **OpenAI MCP Tunnel**。
+- Tailscale 模式：**Codex MCP Server** + **Tailscale OAuth Gateway** + **Tailscale Funnel**。
 
-Tailscale Funnel 现在明确以前台方式运行。使用 Tailscale 连接期间请保持 Funnel 窗口开启；关闭窗口或按 `Ctrl+C` 会停止 HTTPS 443 的 Funnel 映射。watchdog 会监测 MCP、OAuth Gateway 和 Funnel 路由，并在 Funnel 缺失时重新拉起前台窗口；已健康运行的组件会直接复用，避免重复启动。
+Tailscale Funnel 现在明确以前台方式运行。使用 Tailscale 连接期间请保持 Funnel 窗口开启；关闭窗口或按 `Ctrl+C` 会停止 HTTPS 443 的 Funnel 映射。不再安装或启动 watchdog；若组件被关闭，重新运行一键启动脚本即可。已健康运行的组件会直接复用，避免重复启动。
 
 ### 4. 配置 ChatGPT
 

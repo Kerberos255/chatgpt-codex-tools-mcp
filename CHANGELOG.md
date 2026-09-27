@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.6.2 (2026-09-27)
+
+### Improvements
+
+- Windows initialization now asks for `review` or `full` access mode on first setup and supports `-AccessMode review|full`; existing `config.json` values continue to be preserved unless config replacement is explicitly requested.
+- Removed the OpenAI Tunnel and Tailscale MCP watchdog scripts and launcher hooks. One-click launchers still reuse healthy components; stopped components are restarted by rerunning the launcher.
+
+### Security
+
+- Refreshed audited transitive dependencies to patched versions for Hono, `@hono/node-server`, `fast-uri`, `ip-address`, and `qs`.
+
 ## v0.6.1 (2026-09-14)
 
 ### Fixes

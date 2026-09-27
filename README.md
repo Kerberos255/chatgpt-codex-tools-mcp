@@ -61,6 +61,7 @@ init-windows.cmd
 The initializer:
 
 - asks for narrow allowed workspace roots, such as `D:\Projects`
+- asks whether the MCP should use `review` or `full` access mode on first setup
 - installs npm dependencies and builds `dist/server.js`
 - lets you choose **OpenAI Secure MCP Tunnel**, **Tailscale Funnel**, or **Both**
 - creates an ignored local `config.json` on first setup and preserves an existing one unless explicitly forced
@@ -102,10 +103,10 @@ Each launcher starts the MCP server when needed, then starts only its own tunnel
 
 On a normal cold start, the main visible console windows are:
 
-- OpenAI mode: **Codex MCP Server** + **OpenAI MCP Tunnel** + **OpenAI MCP Tunnel Watchdog**.
-- Tailscale mode: **Codex MCP Server** + **Tailscale OAuth Gateway** + **Tailscale Funnel** + **Tailscale MCP Watchdog**.
+- OpenAI mode: **Codex MCP Server** + **OpenAI MCP Tunnel**.
+- Tailscale mode: **Codex MCP Server** + **Tailscale OAuth Gateway** + **Tailscale Funnel**.
 
-The Tailscale Funnel deliberately runs in the foreground. Keep its window open while using the Tailscale connection; closing it or pressing `Ctrl+C` stops the Funnel mapping on HTTPS 443. The watchdog monitors the MCP server, OAuth gateway, and Funnel route and can relaunch a missing foreground Funnel window. Components that are already healthy are reused instead of duplicated.
+The Tailscale Funnel deliberately runs in the foreground. Keep its window open while using the Tailscale connection; closing it or pressing `Ctrl+C` stops the Funnel mapping on HTTPS 443. No watchdog process is installed or started; rerun the one-click launcher if a component is stopped. Components that are already healthy are reused instead of duplicated.
 
 ### 4. Configure ChatGPT
 
