@@ -150,6 +150,8 @@ test("Windows tunnel bootstrap keeps public entry points minimal", () => {
   assert.equal(initializer.includes('"cloudflared.exe", "cloudflared-manifest.json"'), true);
   assert.equal(initializer.includes("Existing config.json kept unchanged"), true);
   assert.equal(funnelConfigurator.includes("Get-Funnel443State"), true);
+  assert.equal(funnelConfigurator.includes("no serve config"), true);
+  assert.equal(funnelConfigurator.includes('$text -eq "{}"'), true);
   assert.equal(funnelConfigurator.includes("10000"), false);
   assert.equal(funnelConfigurator.includes("Local\\ChatGPTCodexToolsMcpTailscaleFunnel"), true);
   assert.equal(funnelConfigurator.includes("funnel --bg"), false);

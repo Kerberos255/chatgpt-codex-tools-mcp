@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.6.3 (2026-09-27)
+
+### Fixes
+
+- Fixed first-run Tailscale Funnel startup when `tailscale funnel status --json` reports `No serve config`; an unconfigured Funnel is now treated as a missing mapping so the launcher can create HTTPS 443 -> OAuth gateway 3334 normally.
+
 ## v0.6.2 (2026-09-27)
 
 ### Improvements

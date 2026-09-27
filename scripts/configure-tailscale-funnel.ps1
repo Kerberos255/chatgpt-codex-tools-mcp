@@ -29,13 +29,22 @@ function Find-NodeExe {
 
 function Get-Funnel443State([string]$TailscaleExe) {
   try {
-    $raw = & $TailscaleExe funnel status --json 2>$null
-    if ($LASTEXITCODE -ne 0 -or -not $raw) { return "unknown" }
-    $status = $raw | ConvertFrom-Json
+    $raw = @(& $TailscaleExe funnel status --json 2>&1)
+    $exitCode = $LASTEXITCODE
+    $text = ($raw | Out-String).Trim()
+
+    if ($exitCode -ne 0) {
+      if ($text -match "(?i)no serve config") { return "missing" }
+      return "unknown"
+    }
+    if (-not $text -or $text -eq "{}") { return "missing" }
+
+    $status = $text | ConvertFrom-Json
+    if (-not $status -or -not $status.PSObject.Properties["TCP"] -or -not $status.TCP) { return "missing" }
     $property = $status.TCP.PSObject.Properties["443"]
     if (-not $property) { return "missing" }
     $route = $property.Value
-    if ([string]$route.TCPForward -eq "127.0.0.1:3334" -and [string]$route.TerminateTLS) { return "expected" }
+    if ([string]$route.TCPForward -eq "127.0.0.1:3334" -and [bool]$route.TerminateTLS) { return "expected" }
     return "conflict"
   } catch {
     return "unknown"
