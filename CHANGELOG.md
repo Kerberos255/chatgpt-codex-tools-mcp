@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.6.4 (2026-10-31)
+
+### Fixes
+
+- Capture physical-pixel bounds with per-monitor DPI awareness, fixing clipped screenshots under Windows display scaling.
+- Add window-relative crops through PrintWindow without requiring a screen DC or falling back to the desktop; require unambiguous same-session window selection.
+- Diagnose input-desktop access separately from capture failures and return bounded method/Win32 errors without exposing process command lines.
+- Validate PNG dimensions and clean temporary capture scripts and images.
+- Add request/error regression tests, Windows native pixel/crop tests and PowerShell wrapper syntax checks; run tests in the Windows CI job.
+
+
 ## v0.6.3 (2026-09-27)
 
 ### Fixes

@@ -240,8 +240,9 @@ test("screenshot tool returns MCP image content and keeps Windows capture fallba
   const screenshot = readFileSync(join(repoRoot, "src", "screenshot.ts"), "utf8");
   assert.match(server, /type:\s*["']image["']/);
   assert.match(server, /mimeType:\s*shot\.mimeType/);
-  assert.match(screenshot, /PrintWindow/);
-  assert.match(screenshot, /BitBlt/);
+  const native = readFileSync(join(repoRoot, "src", "screenshot-native.ts"), "utf8");
+  assert.match(native, /PrintWindow/);
+  assert.match(native, /BitBlt/);
   assert.match(screenshot, /image\/png/);
 });
 

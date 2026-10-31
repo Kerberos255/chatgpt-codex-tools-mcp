@@ -361,10 +361,15 @@ transactional, so keep related edits small and review the entire preview.
 
 ## Screenshot tool
 
+All coordinates and dimensions use physical pixels with per-monitor DPI awareness. For `window` mode, optional `x/y/width/height` crop inside the selected window: x/y are window-relative offsets (default 0); width and height are required together. For `region`, x/y are absolute screen coordinates and may be negative. Ambiguous window-title matches require `windowHandle`.
+
+Window capture uses PrintWindow independently of the screen DC. Results include `method` and `dpiMode`. Desktop access failures and capture-call failures have separate errors with method and Win32 details. Capture does not switch desktops, elevate privileges or bypass capture protection.
+
+
 `screenshot` is available on Windows and returns PNG pixels directly as MCP image content. By default it does not write a file.
 
 - `mode="window"` accepts a case-insensitive `windowTitle` substring or a `windowHandle`; it uses Windows `PrintWindow`, so it can capture a window even when it is obscured.
-- `mode="desktop"`, `monitor`, and `region` capture the interactive desktop. Windows may deny screen-surface access while the desktop is locked or switched away; the tool reports that condition instead of returning a blank image.
+- `mode="desktop"`, `monitor`, and `region` capture the current interactive desktop. Unavailable input desktops and failed capture calls produce separate errors. Successful calls may still contain blank or protected application content; pixel colors do not establish desktop lock state.
 - Optional `savePath` is workspace-relative, requires `workspaceId`, and still passes the normal workspace and deny-path checks.
 
 ## Security rules

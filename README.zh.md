@@ -350,10 +350,15 @@ append         create          overwrite       rename         delete
 
 ## 截图工具
 
+坐标和尺寸使用物理像素，并支持每显示器 DPI 感知。窗口模式可附带 `x/y/width/height` 在选定窗口内裁剪：x/y 为窗口左上角的相对偏移，默认 0；width/height 须同时提供。区域模式使用绝对屏幕坐标，可为负数。窗口标题匹配到多个窗口时，须指定 `windowHandle`。
+
+窗口截图独立使用 PrintWindow，不依赖屏幕 DC。结果包含 `method` 和 `dpiMode`。桌面无法访问、抓图调用失败会分别报错，并提供调用及 Win32 错误信息；不再将一般抓图失败一律解释为需要解锁。截图不会切换桌面、提升权限或绕过截图保护。
+
+
 `screenshot` 仅在 Windows 上提供，直接以 MCP 图片内容返回 PNG；默认不落盘。
 
 - `mode="window"` 可按窗口标题子串或 `windowHandle` 截图，使用 Windows `PrintWindow`，窗口被其他窗口遮挡时也可抓取。
-- `mode="desktop"`、`monitor`、`region` 抓取当前交互桌面。若 Windows 正处于锁屏或桌面切换状态而拒绝屏幕表面访问，工具会明确报错，不会返回黑图冒充成功。
+- `mode="desktop"`、`monitor`、`region` 抓取当前交互桌面。输入桌面不可访问、抓图调用失败会分别报错；调用成功时仍可能出现空白或受保护的应用内容，工具不根据像素颜色判断锁屏状态。
 - 可选 `savePath` 必须配合 `workspaceId`，路径仍受工作区边界和 deny 规则约束。
 
 ## 安全规则

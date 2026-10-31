@@ -234,6 +234,8 @@ const screenshotOutputSchema = z.object({
   left: z.number().int(),
   top: z.number().int(),
   windowTitle: z.string().optional(),
+  method: z.enum(["PrintWindow", "BitBlt"]),
+  dpiMode: z.enum(["per-monitor-v2", "system-aware"]),
   savedPath: z.string().optional(),
 });
 
@@ -672,15 +674,15 @@ function createMcpServer(): McpServer {
     "screenshot",
     {
       title: "Screenshot",
-      description: "Capture the current Windows desktop, monitor, window, or screen region and return a PNG image directly. Use only when the user asks to inspect current UI. Optional savePath must be inside an open workspace.",
+      description: "Capture the current Windows desktop, monitor, window, or region in physical pixels and return a PNG image. In window mode, optional x/y/width/height crop relative to the selected window. Title matches must be unique. Use only when asked to inspect UI. Optional savePath must be inside an open workspace.",
       inputSchema: {
         mode: z.enum(["desktop", "monitor", "window", "region"]).default("desktop"),
         workspaceId: z.string().optional().describe("Required only when savePath is used."),
         monitor: z.number().int().min(0).default(0),
         windowTitle: z.string().optional().describe("For window mode, case-insensitive title substring."),
         windowHandle: z.number().int().positive().optional().describe("For window mode, optional HWND as an integer."),
-        x: z.number().int().optional(),
-        y: z.number().int().optional(),
+        x: z.number().int().optional().describe("Physical pixels: absolute screen x for region; window-relative x for a window crop (default 0)."),
+        y: z.number().int().optional().describe("Physical pixels: absolute screen y for region; window-relative y for a window crop (default 0)."),
         width: z.number().int().positive().max(20000).optional(),
         height: z.number().int().positive().max(20000).optional(),
         savePath: z.string().optional().describe("Optional workspace-relative PNG path. Omit to avoid writing a file."),
@@ -724,6 +726,8 @@ function createMcpServer(): McpServer {
         height: shot.height,
         left: shot.left,
         top: shot.top,
+        method: shot.method,
+        dpiMode: shot.dpiMode,
         windowTitle: matchedWindowTitle,
         savedPath: displaySavePath,
       }) as Record<string, unknown>;
