@@ -187,7 +187,7 @@ The Streamable HTTP endpoint is stateless: each request gets a fresh transport a
 | --- | --- | --- |
 | Meta | `local_status` | Show version, access mode, roots, limits, and Web/SQLite feature status. |
 | Workspace | `open_workspace` | Open a directory under `CTM_ALLOWED_ROOTS` and return a `workspaceId`. |
-| Files | `files` | `list`, `read`, `search`, `find`; recursive `list` with `depth` replaces the old project-tree tool. |
+| Files | `files` | `list`, `read`, `search`, `find`; recursive `list` with `depth` displays the project directory tree. |
 | Git | `git` | Local `status` and `diff` only. Use GitHub/`gh` tooling for remote operations. |
 | Edit | `edit` | `preview` and `confirm` bounded multi-file edits. |
 | Exec | `exec` | `run`, `start`, `read`, `stop` structured executables without a shell. |

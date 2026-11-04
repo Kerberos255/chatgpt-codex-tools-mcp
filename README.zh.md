@@ -183,7 +183,7 @@ Streamable HTTP 端点现在采用无状态模式：每个请求都会创建新�
 | --- | --- | --- |
 | Meta | `local_status` | 查看版本、访问模式、根路径、限制和 Web/SQLite 状态。 |
 | Workspace | `open_workspace` | 打开 `CTM_ALLOWED_ROOTS` 下的目录并返回 `workspaceId`。 |
-| Files | `files` | `list`、`read`、`search`、`find`；递归 `list` + `depth` 取代原项目树工具。 |
+| Files | `files` | `list`、`read`、`search`、`find`；递归 `list` + `depth` 可展开项目目录树。 |
 | Git | `git` | 仅本地 `status`、`diff`；GitHub 远端操作交给 GitHub/`gh` 工具。 |
 | Edit | `edit` | `preview`、`confirm`，保留编辑预览确认。 |
 | Exec | `exec` | `run`、`start`、`read`、`stop`，不经过 Shell。 |
