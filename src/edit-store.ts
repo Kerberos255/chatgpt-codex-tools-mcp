@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+import { createReadStream } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename as fsRename, unlink, writeFile } from "node:fs/promises";
 import { dirname, resolve, sep } from "node:path";
@@ -44,6 +46,7 @@ export interface PendingEdit {
   workspaceId: string;
   changes: Change[];
   diffs: DiffEntry[];
+  fingerprints: FileFingerprint[];
   createdAt: number;
 }
 
@@ -53,22 +56,69 @@ export interface DiffEntry {
   diff: string;
 }
 
+export interface FileFingerprint {
+  path: string;
+  digest: string | null;
+}
+
+const MAX_PENDING_EDITS = 128;
+const EDIT_TTL_MS = 10 * 60_000;
+
+export async function snapshotFiles(root: string, changes: Change[]): Promise<FileFingerprint[]> {
+  const files = new Set<string>();
+  for (const change of changes) {
+    files.add(change.path);
+    if (change.type === "rename" && change.newPath) files.add(change.newPath);
+  }
+  const snapshots: FileFingerprint[] = [];
+  for (const path of files) snapshots.push({ path, digest: await digestFile(resolveEditPath(root, path)) });
+  return snapshots;
+}
+
+export async function assertFilesUnchanged(root: string, fingerprints: FileFingerprint[]): Promise<void> {
+  for (const file of fingerprints) {
+    const actual = await digestFile(resolveEditPath(root, file.path));
+    if (actual !== file.digest) throw new Error(`File changed since preview: ${file.path}. Preview again.`);
+  }
+}
+
+async function digestFile(path: string): Promise<string | null> {
+  const hash = createHash("sha256");
+  try {
+    for await (const chunk of createReadStream(path)) hash.update(chunk);
+    return hash.digest("hex");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
+}
+
 // --- Edit Store ---
 
 export class EditStore {
   private readonly edits = new Map<string, PendingEdit>();
 
   create(input: Omit<PendingEdit, "id" | "createdAt">): PendingEdit {
+    this.prune();
+    if (this.edits.size >= MAX_PENDING_EDITS) throw new Error("Too many pending edits.");
     const edit = { ...input, id: `edit_${randomUUID()}`, createdAt: Date.now() };
     this.edits.set(edit.id, edit);
     return edit;
   }
 
   take(actionId: string): PendingEdit {
+    this.prune();
     const edit = this.edits.get(actionId);
-    if (!edit) throw new Error(`Unknown action_id: ${actionId}`);
+    if (!edit) throw new Error(`Unknown or expired action_id: ${actionId}`);
     this.edits.delete(actionId);
     return edit;
+  }
+
+  private prune(): void {
+    const cutoff = Date.now() - EDIT_TTL_MS;
+    for (const [id, value] of this.edits) {
+      if (value.createdAt <= cutoff) this.edits.delete(id);
+    }
   }
 }
 

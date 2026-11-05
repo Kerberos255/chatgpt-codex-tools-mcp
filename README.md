@@ -190,7 +190,7 @@ The Streamable HTTP endpoint is stateless: each request gets a fresh transport a
 | Files | `files` | `list`, `read`, `search`, `find`; recursive `list` with `depth` displays the project directory tree. |
 | Git | `git` | Local `status` and `diff` only. Use GitHub/`gh` tooling for remote operations. |
 | Edit | `edit` | `preview` and `confirm` bounded multi-file edits. |
-| Exec | `exec` | `run`, `start`, `read`, `stop` structured executables without a shell. |
+| Exec | `exec` | Structured `run` / `start` / `read` / `stop`, including guarded PowerShell commands in `full` mode. |
 | SQLite | `sqlite` | Optional allowlisted `schema`, `select`, `preview`, `confirm`. |
 | Web | `web` | Optional `search` and public HTTP `fetch`. |
 | Capture | `screenshot` | Windows `desktop`, `monitor`, `window`, or `region` capture; returns PNG image content directly. |
@@ -220,8 +220,10 @@ For processes, pass an action, a real executable, and an argv array:
 }
 ```
 
-Pipes, redirects, command chaining, shell expansion, and shell builtins are not
-supported.
+Structured argv arguments are passed literally, never parsed as a shell command.
+Pipelines, redirection, chaining and shell builtins are not available. On Windows,
+`npm`, `npm.cmd`, `pnpm` and `yarn` run through their installed Node CLI
+entrypoints without enabling a shell.
 
 ## Access modes
 
@@ -232,8 +234,8 @@ CTM_ACCESS_MODE=full
 
 - `review` permits a small inspection/test process allowlist.
 - `full` permits broader structured executables.
-- Both modes still block direct shells (`cmd`, PowerShell, `sh`, `bash`) and
-  dangerous process patterns.
+- `cmd`, `sh` and `bash` remain blocked. In `full` mode, PowerShell / PowerShell 7 supports `-Command` and workspace `.ps1` scripts with targeted high-risk-operation checks.
+- PowerShell runs with `-NoProfile -NonInteractive`. Script checks help prevent mistakes but are **not an arbitrary-code security sandbox**.
 - Specialized read, Git, edit, web, and SQLite tools should be preferred over
   generic process execution.
 
@@ -423,7 +425,7 @@ Add the project parent directory to `mcp.allowedRoots` or
 ### Process command is blocked
 
 Use specialized tools first. In `review` mode, only the small process allowlist
-is accepted. Shell executables and shell syntax are blocked in every mode.
+is accepted. `full` allows guarded PowerShell `-Command` / `-File`; other shells remain blocked. Script checks are best-effort, not a sandbox.
 
 ### SQLite tools are unavailable
 

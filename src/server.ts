@@ -1,4 +1,4 @@
-import { readdir, readFile, stat } from "node:fs/promises";
+import { open, readdir, stat } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { join, relative, sep, resolve as pathResolve } from "node:path";
 import express from "express";
@@ -8,7 +8,7 @@ import * as z from "zod/v4";
 import { loadConfig } from "./config.js";
 import { createGlobMatcher, splitGlobPatterns, type GlobMatcher } from "./globs.js";
 import { assertNotDenied, relativeDisplayPath } from "./paths.js";
-import { EditStore, type Change, previewChanges, applyChanges } from "./edit-store.js";
+import { EditStore, type Change, previewChanges, applyChanges, snapshotFiles, assertFilesUnchanged } from "./edit-store.js";
 import { ManagedProcessStore, type ManagedProcessSnapshot } from "./managed-processes.js";
 import { assertProcessAllowed, runProcess, type ProcessResult } from "./process-runner.js";
 import { redactText, redactValue } from "./redaction.js";
@@ -276,14 +276,10 @@ function assertSqliteChangePayload(change: unknown): void {
   assertMaxBytes('sqlite(action="preview") payload', JSON.stringify(change), payloadLimits.sqliteChangeMaxPayloadBytes);
 }
 
-function assertEditChangePaths(workspaceId: string, changes: Change[]): void {
+async function assertEditChangePaths(workspaceId: string, changes: Change[]): Promise<void> {
   for (const change of changes) {
-    const { workspace, absolutePath } = workspaces.resolve(workspaceId, change.path);
-    assertNotDenied(absolutePath, workspace.root, config.denyGlobs);
-    if (change.type === "rename" && change.newPath) {
-      const { workspace: targetWorkspace, absolutePath: targetPath } = workspaces.resolve(workspaceId, change.newPath);
-      assertNotDenied(targetPath, targetWorkspace.root, config.denyGlobs);
-    }
+    await workspaces.resolveSafe(workspaceId, change.path);
+    if (change.type === "rename" && change.newPath) await workspaces.resolveSafe(workspaceId, change.newPath);
   }
 }
 
@@ -399,8 +395,7 @@ function createMcpServer(): McpServer {
       outputSchema: filesOutputSchema,
     },
     async ({ action, workspaceId, path, recursive, depth, pattern, caseSensitive, contextLines, maxMatches, maxResults, include, exclude }) => {
-      const { workspace, absolutePath } = workspaces.resolve(workspaceId, path);
-      assertNotDenied(absolutePath, workspace.root, config.denyGlobs);
+      const { workspace, absolutePath } = await workspaces.resolveSafe(workspaceId, path);
       const displayPath = relativeDisplayPath(workspace.root, absolutePath);
 
       if (action === "list") {
@@ -410,10 +405,14 @@ function createMcpServer(): McpServer {
         }
         const entries = await readdir(absolutePath, { withFileTypes: true });
         const lines = entries
+          .filter(entry => {
+            try { assertNotDenied(join(absolutePath, entry.name), workspace.root, config.denyGlobs); return true; } catch { return false; }
+          })
           .sort((a, b) => a.name.localeCompare(b.name))
-          .map((entry) => `${entry.isDirectory() ? "dir " : "file"} ${entry.name}`)
+          .slice(0, 3000)
+          .map(entry => `${entry.isDirectory() ? "dir " : "file"} ${entry.name}`)
           .join("\n");
-        return textResult(lines || "(empty)", { action, path: displayPath, recursive: false });
+        return textResult(capText(lines || "(empty)", config.maxOutputBytes), { action, path: displayPath, recursive: false });
       }
 
       if (action === "read") {
@@ -495,10 +494,11 @@ function createMcpServer(): McpServer {
         if (!workspaceId || !changes) throw new Error("workspaceId and changes are required for edit action=preview.");
         const typedChanges = changes as Change[];
         assertPreviewEditPayload(typedChanges);
-        assertEditChangePaths(workspaceId, typedChanges);
-        const { absolutePath } = workspaces.resolve(workspaceId, ".");
+        await assertEditChangePaths(workspaceId, typedChanges);
+        const { absolutePath } = await workspaces.resolveSafe(workspaceId, ".");
+        const fingerprints = await snapshotFiles(absolutePath, typedChanges);
         const diffs = await previewChanges(absolutePath, typedChanges);
-        const pending = edits.create({ workspaceId, changes: typedChanges, diffs });
+        const pending = edits.create({ workspaceId, changes: typedChanges, diffs, fingerprints });
         const combinedDiff = diffs.map((d) => `--- ${d.path} (${d.type}) ---\n${d.diff}`).join("\n\n");
         return textResult(`Pending edit: ${pending.id}\n\n${combinedDiff}`, {
           action_id: pending.id,
@@ -509,8 +509,9 @@ function createMcpServer(): McpServer {
 
       if (!actionId) throw new Error("actionId is required for edit action=confirm.");
       const pending = edits.take(actionId);
-      assertEditChangePaths(pending.workspaceId, pending.changes);
-      const { absolutePath } = workspaces.resolve(pending.workspaceId, ".");
+      await assertEditChangePaths(pending.workspaceId, pending.changes);
+      const { absolutePath } = await workspaces.resolveSafe(pending.workspaceId, ".");
+      await assertFilesUnchanged(absolutePath, pending.fingerprints);
       await applyChanges(absolutePath, pending.changes);
       return textResult(`Applied ${pending.changes.length} change(s) from ${actionId}`, {
         applied: true,
@@ -528,7 +529,7 @@ function createMcpServer(): McpServer {
     "exec",
     {
       title: "Execute process",
-      description: "Run or manage local executables with structured argv and no shell. action=run waits for a short command; start/read/stop manage long-running processes.",
+      description: "Run or manage structured executables. In full mode, supports PowerShell -Command/-File with high-risk operation checks; Windows package managers use Node CLI entrypoints.",
       inputSchema: {
         action: z.enum(["run", "start", "read", "stop"]),
         workspaceId: z.string().optional().describe("Required for run/start."),
@@ -551,8 +552,12 @@ function createMcpServer(): McpServer {
       }
 
       if (!workspaceId || !command) throw new Error(`workspaceId and command are required for exec action=${action}.`);
-      assertProcessAllowed(command, args, config.accessMode);
-      const { absolutePath } = workspaces.resolve(workspaceId, workingDirectory);
+      const { absolutePath } = await workspaces.resolveSafe(workspaceId, workingDirectory);
+      assertProcessAllowed(command, args, config.accessMode, {
+        cwd: absolutePath,
+        allowedRoots: config.allowedRoots,
+        denyGlobs: config.denyGlobs,
+      });
       const dirStat = await stat(absolutePath);
       if (!dirStat.isDirectory()) throw new Error(`workingDirectory is not a directory: ${workingDirectory}`);
       const outputLimit = Math.min(maxBytes ?? config.maxOutputBytes, config.maxOutputBytes);
@@ -695,8 +700,7 @@ function createMcpServer(): McpServer {
       let displaySavePath: string | undefined;
       if (savePath) {
         if (!workspaceId) throw new Error("workspaceId is required when screenshot savePath is used.");
-        const resolved = workspaces.resolve(workspaceId, savePath);
-        assertNotDenied(resolved.absolutePath, resolved.workspace.root, config.denyGlobs);
+        const resolved = await workspaces.resolveSafe(workspaceId, savePath);
         absoluteSavePath = resolved.absolutePath;
         displaySavePath = relativeDisplayPath(resolved.workspace.root, resolved.absolutePath);
       }
@@ -761,8 +765,7 @@ async function gitDiffTool(
   let pathspec: string | undefined;
 
   if (options.path) {
-    const { absolutePath } = workspaces.resolve(workspaceId, options.path);
-    assertNotDenied(absolutePath, workspace.root, config.denyGlobs);
+    const { absolutePath } = await workspaces.resolveSafe(workspaceId, options.path);
     pathspec = relativeDisplayPath(workspace.root, absolutePath);
   }
 
@@ -813,8 +816,13 @@ function combineProcessResults(results: ProcessResult[], maxBytes: number): Proc
 }
 
 function capText(text: string, maxBytes: number): string {
-  if (Buffer.byteLength(text, "utf8") <= maxBytes) return text;
-  return text.slice(0, maxBytes) + "\n[output truncated]\n";
+  const bytes = Buffer.from(text);
+  if (bytes.byteLength <= maxBytes) return text;
+  const marker = "\n[output truncated]\n";
+  const allowance = Math.max(0, maxBytes - Buffer.byteLength(marker));
+  let prefix = bytes.subarray(0, allowance).toString("utf8");
+  while (Buffer.byteLength(prefix, "utf8") > allowance) prefix = prefix.slice(0, -1);
+  return prefix + (maxBytes >= Buffer.byteLength(marker) ? marker : "");
 }
 
 // --- Result helper ---
@@ -859,9 +867,21 @@ function managedProcessResult(snapshot: ManagedProcessSnapshot) {
 // --- File reading ---
 
 async function readFileCapped(path: string, maxBytes: number): Promise<{ text: string; truncated: boolean }> {
-  const buffer = await readFile(path);
-  if (buffer.byteLength <= maxBytes) return { text: buffer.toString("utf8"), truncated: false };
-  return { text: buffer.subarray(0, maxBytes).toString("utf8") + "\n[file truncated]\n", truncated: true };
+  const handle = await open(path, "r");
+  try {
+    const info = await handle.stat();
+    if (!info.isFile()) throw new Error("Only regular files can be read.");
+    const limit = Math.min(info.size, maxBytes);
+    const buffer = Buffer.alloc(limit);
+    let received = 0;
+    while (received < limit) {
+      const value = await handle.read(buffer, received, limit - received, received);
+      if (!value.bytesRead) break;
+      received += value.bytesRead;
+    }
+    const truncated = info.size > received;
+    return { text: buffer.subarray(0, received).toString("utf8") + (truncated ? "\n[file truncated]\n" : ""), truncated };
+  } finally { await handle.close(); }
 }
 
 // --- Enhanced search_text_files ---
@@ -909,7 +929,7 @@ async function searchTextFiles(
     if (info.isDirectory()) {
       const entries = await readdir(path, { withFileTypes: true });
       for (const entry of entries) {
-        if (["node_modules", "dist", ".git"].includes(entry.name)) continue;
+        if (entry.isSymbolicLink() || ["node_modules", "dist", ".git"].includes(entry.name)) continue;
         const childRel = relBase ? `${relBase}/${entry.name}` : entry.name;
         if (excludeMatcher && (excludeMatcher(childRel) || excludeMatcher(`${childRel}/`))) continue;
         await walk(join(path, entry.name), childRel);
@@ -1083,7 +1103,7 @@ async function findFilesByGlob(
     if (info.isDirectory()) {
       const entries = await readdir(path, { withFileTypes: true });
       for (const entry of entries) {
-        if (["node_modules", "dist", ".git"].includes(entry.name)) continue;
+        if (entry.isSymbolicLink() || ["node_modules", "dist", ".git"].includes(entry.name)) continue;
         await walk(join(path, entry.name));
       }
       return;
@@ -1110,40 +1130,46 @@ async function buildProjectTree(
   maxDepth: number,
 ): Promise<string> {
   const lines: string[] = [];
-
+  const maxEntries = 3000;
+  const maxBytes = Math.min(config.maxOutputBytes, 60_000);
+  let bytes = 0;
+  let visited = 0;
+  let clipped = false;
+  function push(line: string): void {
+    if (clipped) return;
+    const next = Buffer.byteLength(line, "utf8") + 1;
+    if (lines.length >= maxEntries || bytes + next > maxBytes) { clipped = true; return; }
+    lines.push(line); bytes += next;
+  }
   async function walk(path: string, depth: number, prefix: string): Promise<void> {
-    if (depth > maxDepth) return;
-
+    if (clipped || depth > maxDepth) return;
+    if (++visited > 15_000) { clipped = true; return; }
     let info;
     try {
       info = await stat(path);
       assertNotDenied(path, root, config.denyGlobs);
-    } catch {
-      return;
+    } catch { return; }
+    if (!info.isDirectory()) { push(`📄 ${relative(root, path)}`); return; }
+    const entries = await readdir(path, { withFileTypes: true });
+    const visible = entries.filter(entry => {
+      if (entry.isSymbolicLink() || ["node_modules", "dist", ".git"].includes(entry.name)) return false;
+      try { assertNotDenied(join(path, entry.name), root, config.denyGlobs); return true; } catch { return false; }
+    }).sort((a, b) => a.name.localeCompare(b.name));
+    if (depth > 0) push(`${prefix}📁 ${path.split(sep).pop()}/`);
+    const childPrefix = depth === 0 ? "" : `${prefix}  `;
+    if (depth < maxDepth) {
+      for (const entry of visible) {
+        if (clipped) break;
+        if (entry.isDirectory()) await walk(join(path, entry.name), depth + 1, `${childPrefix}  `);
+      }
     }
-
-    if (info.isDirectory()) {
-      const entries = await readdir(path, { withFileTypes: true });
-      const dirs = entries.filter((e) => e.isDirectory() && !["node_modules", "dist", ".git"].includes(e.name)).sort((a, b) => a.name.localeCompare(b.name));
-      const files = entries.filter((e) => e.isFile()).sort((a, b) => a.name.localeCompare(b.name));
-
-      if (depth > 0) {
-        lines.push(`${prefix}📁 ${path.split(sep).pop()}/`);
-      }
-
-      const newPrefix = depth === 0 ? "" : `${prefix}  `;
-      for (const dir of dirs) {
-        await walk(join(path, dir.name), depth + 1, `${newPrefix}  `);
-      }
-      for (const file of files) {
-        lines.push(`${newPrefix}📄 ${file.name}`);
-      }
-    } else {
-      lines.push(`📄 ${relative(root, path)}`);
+    for (const entry of visible) {
+      if (clipped) break;
+      if (entry.isFile()) push(`${childPrefix}📄 ${entry.name}`);
     }
   }
-
   await walk(startPath, currentDepth, "");
+  if (clipped) lines.push("[tree truncated: narrow the path or depth]");
   return lines.join("\n");
 }
 

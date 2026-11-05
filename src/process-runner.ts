@@ -1,4 +1,7 @@
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
+import { delimiter, dirname, join } from "node:path";
+import { assertPowerShellAllowed, type PowerShellPolicyContext } from "./powershell-policy.js";
 import type { AccessMode } from "./config.js";
 
 export interface ProcessResult {
@@ -8,165 +11,106 @@ export interface ProcessResult {
   timedOut: boolean;
 }
 
-const blockedPatterns = [
-  /\brm\s+(-[^\s]*r[^\s]*f|-[^\s]*f[^\s]*r)\b/i,
-  /\bdel\s+\/[sq]\b/i,
-  /\bformat\b/i,
-  /\breg\s+delete\b/i,
-  /\bnet\s+user\b/i,
-  /\bsc\s+delete\b/i,
-  /\bshutdown\b/i,
-  /\breboot\b/i,
-  /\biex\b/i,
-  /\binvoke-expression\b/i,
-  /\b(curl|wget|irm|iwr|invoke-webrequest)\b[\s\S]*(\|\s*(sh|bash|pwsh|powershell|iex|invoke-expression))/i,
-  />\s*[^&]/,
-  />>\s*[^&]/,
-  /\btee\b/i,
-  /\bsed\s+-i\b/i,
-  /\bperl\s+-i\b/i,
-];
+const shells = new Set(["bash", "bash.exe", "sh", "sh.exe", "cmd", "cmd.exe"]);
+const powerShellExecutables = new Set(["powershell", "powershell.exe", "pwsh", "pwsh.exe"]);
+const blockedSystemTools = new Set(["format", "format.com", "diskpart", "diskpart.exe", "reg", "reg.exe", "sc", "sc.exe", "shutdown", "shutdown.exe", "reboot", "reboot.exe"]);
+const readGit = new Set(["status", "diff", "log", "show", "rev-parse", "ls-files", "--version"]);
+const packageRun = new Set(["test", "run"]);
 
-const blockedProcessCommands = new Set([
-  "bash",
-  "bash.exe",
-  "cmd",
-  "cmd.exe",
-  "format",
-  "format.com",
-  "powershell",
-  "powershell.exe",
-  "pwsh",
-  "pwsh.exe",
-  "reboot",
-  "reboot.exe",
-  "reg",
-  "reg.exe",
-  "sc",
-  "sc.exe",
-  "sh",
-  "sh.exe",
-  "shutdown",
-  "shutdown.exe",
-]);
+function executableName(command: string): string {
+  return command.trim().split(/[\\/]/).pop()?.toLowerCase() ?? "";
+}
 
-const gitReadSubcommands = new Set([
-  "status",
-  "diff",
-  "log",
-  "show",
-  "branch",
-  "rev-parse",
-  "ls-files",
-  "--version",
-]);
-
-const packageManagerRunSubcommands = new Set(["test", "run"]);
-
-export function assertProcessAllowed(command: string, args: string[], accessMode: AccessMode): void {
-  const trimmed = command.trim();
-  if (!trimmed) throw new Error("Empty process command.");
-
-  const executable = trimmed.split(/[\\/]/).pop()?.toLowerCase() ?? trimmed.toLowerCase();
-  if (blockedProcessCommands.has(executable)) {
+/** Check executable and argv as separate fields. argv contains literal strings, not shell syntax. */
+export function assertProcessAllowed(
+  command: string, args: string[], accessMode: AccessMode, context: PowerShellPolicyContext = {},
+): void {
+  const exe = executableName(command);
+  if (!exe) throw new Error("Empty process command.");
+  if (powerShellExecutables.has(exe)) {
+    if (accessMode === "review") {
+      if (args.length === 1 && ["-version", "-v", "-help", "-?"].includes(args[0].toLowerCase())) return;
+      throw new Error("PowerShell commands require full access mode; review mode only allows -Version or -Help.");
+    }
+    assertPowerShellAllowed(args, context);
+    return;
+  }
+  if (shells.has(exe) || blockedSystemTools.has(exe)) {
     throw new Error("Process command launches a shell or blocked system tool. Use structured tools instead.");
   }
-
-  const joined = [trimmed, ...args].join(" ");
-  for (const pattern of blockedPatterns) {
-    if (pattern.test(joined)) throw new Error("Process arguments match a blocked policy pattern.");
+  if (exe === "net" || exe === "net.exe") {
+    if (args[0]?.toLowerCase() === "user") throw new Error("Account management via net user is blocked.");
   }
-
+  if (exe === "rm" || exe === "rm.exe") {
+    if (args.some(arg => /^-[a-z]*r[a-z]*f[a-z]*$/i.test(arg) || /^-[a-z]*f[a-z]*r[a-z]*$/i.test(arg)) ||
+        (args.includes("-r") || args.includes("-R")) && args.includes("-f")) {
+      throw new Error("Recursive forced deletion is blocked.");
+    }
+  }
+  if (exe === "del" || exe === "del.exe") {
+    if (args.some(arg => /^\/[sq]/i.test(arg))) throw new Error("Recursive or quiet deletion is blocked.");
+  }
   if (accessMode !== "review") return;
-  if (isReviewProcessAllowed(executable, args)) return;
-
+  if (exe === "git" || exe === "git.exe") {
+    if (readGit.has(args[0]?.toLowerCase() ?? "")) return;
+  }
+  if (["npm", "npm.cmd", "pnpm", "pnpm.cmd", "yarn", "yarn.cmd"].includes(exe)) {
+    if (packageRun.has(args[0]?.toLowerCase() ?? "")) return;
+  }
+  if (["node", "node.exe", "python", "python.exe", "python3", "python3.exe", "py", "py.exe"].includes(exe)) {
+    if (args.length === 1 && ["--version", "-v", "-V"].includes(args[0])) return;
+  }
+  if (["pytest", "pytest.exe", "rg", "rg.exe", "grep", "grep.exe", "where", "where.exe"].includes(exe)) return;
   throw new Error("Process command is not in the review-mode allowlist.");
 }
 
-function isReviewProcessAllowed(executable: string, args: string[]): boolean {
-  const firstArg = args[0]?.toLowerCase();
-
-  if (executable === "git" || executable === "git.exe") {
-    return firstArg ? gitReadSubcommands.has(firstArg) : false;
+export function resolveProcessCommand(command: string, args: string[]): { command: string; args: string[] } {
+  const name = executableName(command).replace(/\.cmd$/i, "");
+  if (powerShellExecutables.has(executableName(command))) {
+    // Do not run user profiles and do not enter an interactive shell.
+    return { command, args: ["-NoProfile", "-NonInteractive", ...args] };
   }
-
-  if (["npm", "npm.cmd", "pnpm", "pnpm.cmd", "yarn", "yarn.cmd"].includes(executable)) {
-    return firstArg ? packageManagerRunSubcommands.has(firstArg) : false;
+  if (process.platform !== "win32" || !["npm", "pnpm", "yarn"].includes(name)) return { command, args };
+  // Node cannot spawn .cmd wrappers with shell:false on Windows. Launch the manager's
+  // real JavaScript entry point directly, preserving the no-shell boundary.
+  const entry = name === "npm" ? ["npm", "bin", "npm-cli.js"]
+    : name === "pnpm" ? ["pnpm", "bin", "pnpm.cjs"] : ["yarn", "bin", "yarn.js"];
+  const path = process.env.Path ?? process.env.PATH ?? "";
+  const dirs = [dirname(process.execPath), ...path.split(delimiter).filter(Boolean)];
+  if (command.includes("\\") || command.includes("/")) dirs.unshift(dirname(command));
+  for (const dir of new Set(dirs)) {
+    const target = join(dir, "node_modules", ...entry);
+    if (existsSync(target)) return { command: process.execPath, args: [target, ...args] };
   }
-
-  if (["node", "node.exe", "python", "python.exe", "python3", "python3.exe", "py", "py.exe"].includes(executable)) {
-    return args.length === 1 && ["--version", "-v", "-V"].includes(args[0]);
-  }
-
-  return [
-    "pytest",
-    "pytest.exe",
-    "rg",
-    "rg.exe",
-    "grep",
-    "grep.exe",
-    "where",
-    "where.exe",
-  ].includes(executable);
+  throw new Error(`Cannot locate the ${name} Node CLI; install it alongside Node or use its explicit JavaScript entrypoint.`);
 }
 
-export async function runProcess(input: {
-  command: string;
-  args: string[];
-  cwd: string;
-  timeoutMs: number;
-  maxOutputBytes: number;
-}): Promise<ProcessResult> {
-  return new Promise((resolve) => {
-    const child = spawn(input.command, input.args, {
-      cwd: input.cwd,
-      shell: false,
-      windowsHide: true,
-      env: scrubEnv(process.env),
-    });
+/** Byte-bounded accumulation: O(output limit) memory and no repeated full-string copies. */
+export class BoundedOutput {
+  private chunks: Buffer[] = [];
+  private count = 0;
+  private truncated = false;
+  constructor(private readonly maxBytes: number) {}
 
-    let stdout = "";
-    let stderr = "";
-    let timedOut = false;
-    let settled = false;
-    let timer: NodeJS.Timeout;
-
-    const finish = (result: ProcessResult) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      resolve(result);
-    };
-
-    timer = setTimeout(() => {
-      timedOut = true;
-      child.kill("SIGTERM");
-    }, input.timeoutMs);
-
-    child.stdout?.on("data", (chunk: Buffer) => {
-      stdout = appendCapped(stdout, chunk.toString("utf8"), input.maxOutputBytes);
-    });
-    child.stderr?.on("data", (chunk: Buffer) => {
-      stderr = appendCapped(stderr, chunk.toString("utf8"), input.maxOutputBytes);
-    });
-    child.on("error", (error) => {
-      finish({
-        stdout,
-        stderr: appendCapped(stderr, error.message, input.maxOutputBytes),
-        exitCode: null,
-        timedOut,
-      });
-    });
-    child.on("close", (exitCode) => {
-      finish({ stdout, stderr, exitCode, timedOut });
-    });
-  });
-}
-
-function appendCapped(current: string, next: string, maxBytes: number): string {
-  const combined = current + next;
-  if (Buffer.byteLength(combined, "utf8") <= maxBytes) return combined;
-  return combined.slice(0, maxBytes) + "\n[output truncated]\n";
+  append(chunk: Buffer | string): void {
+    const bytes = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
+    const remaining = Math.max(0, this.maxBytes - this.count);
+    if (bytes.byteLength > remaining) this.truncated = true;
+    if (remaining > 0) {
+      const part = bytes.subarray(0, remaining);
+      this.chunks.push(part);
+      this.count += part.byteLength;
+    }
+  }
+  text(): string {
+    const marker = "\n[output truncated]\n";
+    const allowance = Math.max(0, this.maxBytes - (this.truncated ? Buffer.byteLength(marker) : 0));
+    let value = Buffer.concat(this.chunks, this.count).subarray(0, allowance).toString("utf8");
+    // An incomplete trailing UTF-8 sequence may decode to a 3-byte replacement character.
+    while (Buffer.byteLength(value, "utf8") > allowance) value = value.slice(0, -1);
+    if (!this.truncated || this.maxBytes < Buffer.byteLength(marker)) return value;
+    return value + marker;
+  }
 }
 
 export function scrubEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
@@ -176,4 +120,37 @@ export function scrubEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
     clean[key] = value;
   }
   return clean;
+}
+
+export async function runProcess(input: {
+  command: string;
+  args: string[];
+  cwd: string;
+  timeoutMs: number;
+  maxOutputBytes: number;
+}): Promise<ProcessResult> {
+  const invocation = resolveProcessCommand(input.command, input.args);
+  return new Promise(resolve => {
+    const stdout = new BoundedOutput(input.maxOutputBytes);
+    const stderr = new BoundedOutput(input.maxOutputBytes);
+    const child = spawn(invocation.command, invocation.args, {
+      cwd: input.cwd, shell: false, windowsHide: true, env: scrubEnv(process.env),
+    });
+    let timedOut = false;
+    let settled = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      child.kill("SIGTERM");
+    }, input.timeoutMs);
+    function finish(exitCode: number | null): void {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve({ stdout: stdout.text(), stderr: stderr.text(), exitCode, timedOut });
+    }
+    child.stdout?.on("data", (chunk: Buffer) => stdout.append(chunk));
+    child.stderr?.on("data", (chunk: Buffer) => stderr.append(chunk));
+    child.on("error", error => { stderr.append(error.message); finish(null); });
+    child.on("close", exitCode => finish(exitCode));
+  });
 }

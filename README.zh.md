@@ -186,7 +186,7 @@ Streamable HTTP 端点现在采用无状态模式：每个请求都会创建新�
 | Files | `files` | `list`、`read`、`search`、`find`；递归 `list` + `depth` 可展开项目目录树。 |
 | Git | `git` | 仅本地 `status`、`diff`；GitHub 远端操作交给 GitHub/`gh` 工具。 |
 | Edit | `edit` | `preview`、`confirm`，保留编辑预览确认。 |
-| Exec | `exec` | `run`、`start`、`read`、`stop`，不经过 Shell。 |
+| Exec | `exec` | 结构化执行；`full` 模式支持经风险检查的 PowerShell `-Command` / `-File`，Windows 包管理器使用 Node CLI。 |
 | SQLite | `sqlite` | 可选白名单数据库的 `schema`、`select`、`preview`、`confirm`。 |
 | Web | `web` | 可选 `search` 和公共 HTTP `fetch`。 |
 | Capture | `screenshot` | Windows 桌面、显示器、窗口或区域截图，直接返回 PNG 图片内容。 |
@@ -214,7 +214,7 @@ open_workspace
 }
 ```
 
-不支持管道、重定向、命令串联、Shell 展开或 Shell 内置命令。
+argv 参数按原样传递，不解析为 Shell 语法；不支持 Shell 管道、重定向、串联和内置命令。
 
 ## 访问模式
 
@@ -225,7 +225,8 @@ CTM_ACCESS_MODE=full
 
 - `review` 只允许少量检查/测试进程。
 - `full` 允许更广的结构化可执行程序。
-- 两种模式仍会阻止直接 Shell（`cmd`、PowerShell、`sh`、`bash`）和危险参数模式。
+- `cmd`、`sh`、`bash` 仍被禁止；`full` 模式允许 PowerShell / PowerShell 7 的 `-Command` 与工作区 `.ps1`，检查明确的高风险操作。
+- PowerShell 自动使用 `-NoProfile -NonInteractive`；检查旨在防误操作，**不能替代安全沙箱**。
 - 应优先使用专用的读取、Git、编辑、Web 和 SQLite 工具。
 
 ## 配置
@@ -408,8 +409,7 @@ OpenAI Secure MCP Tunnel 应创建或重新创建 MCP 应用并选择 **No Authe
 
 ### 进程命令被阻止
 
-优先使用专用工具。`review` 模式只接受少量进程；所有模式都禁止 Shell 可执行文件
-和 Shell 语法。
+优先使用专用工具。`review` 模式只接受少量进程；`full` 模式允许经风险检查的 PowerShell `-Command`、`-File`，但这不是完整的脚本沙箱。
 
 ### SQLite 工具不可用
 

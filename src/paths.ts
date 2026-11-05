@@ -1,33 +1,28 @@
-import { basename, extname, relative, resolve, sep } from "node:path";
+import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
+import { realpath } from "node:fs/promises";
+import { createGlobMatcher, type GlobMatcher } from "./globs.js";
 
 export class AccessDeniedError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "AccessDeniedError";
-  }
+  constructor(message: string) { super(message); this.name = "AccessDeniedError"; }
 }
 
 export function isInsideRoot(path: string, root: string): boolean {
-  const resolvedPath = resolve(path);
-  const resolvedRoot = resolve(root);
-  const rel = relative(resolvedRoot, resolvedPath);
-  return rel === "" || (!rel.startsWith("..") && rel !== ".." && !rel.includes(`..${sep}`));
+  const rel = relative(resolve(root), resolve(path));
+  return rel === "" || (!isAbsolute(rel) && rel !== ".." && !rel.startsWith(`..${sep}`));
 }
 
 export function assertAllowedPath(path: string, allowedRoots: string[]): string {
-  const resolved = resolve(path);
-  if (!allowedRoots.some((root) => isInsideRoot(resolved, root))) {
-    throw new AccessDeniedError(`Path is outside allowed roots: ${path}`);
+  const candidate = resolve(path);
+  if (!allowedRoots.some(root => isInsideRoot(candidate, root))) {
+    throw new AccessDeniedError("Path is outside allowed roots.");
   }
-  return resolved;
+  return candidate;
 }
 
 export function resolveWorkspacePath(root: string, inputPath: string): string {
-  const resolved = resolve(root, inputPath);
-  if (!isInsideRoot(resolved, root)) {
-    throw new AccessDeniedError(`Path is outside workspace: ${inputPath}`);
-  }
-  return resolved;
+  const candidate = resolve(root, inputPath);
+  if (!isInsideRoot(candidate, root)) throw new AccessDeniedError("Path is outside workspace.");
+  return candidate;
 }
 
 export function relativeDisplayPath(root: string, path: string): string {
@@ -35,28 +30,45 @@ export function relativeDisplayPath(root: string, path: string): string {
   return rel ? rel.split(sep).join("/") : ".";
 }
 
+const denyMatcherCache = new WeakMap<string[], GlobMatcher>();
 export function assertNotDenied(path: string, workspaceRoot: string, denyGlobs: string[]): void {
+  let matcher = denyMatcherCache.get(denyGlobs);
+  if (!matcher) {
+    matcher = createGlobMatcher(denyGlobs.join(","), { matchBasename: true });
+    denyMatcherCache.set(denyGlobs, matcher);
+  }
   const rel = relativeDisplayPath(workspaceRoot, path);
-  const lowerPath = rel.toLowerCase();
-  const lowerBase = basename(lowerPath);
-  const lowerExt = extname(lowerBase);
-  const parts = lowerPath.split("/");
-
-  for (const glob of denyGlobs.map((entry) => entry.toLowerCase())) {
-    if (glob === "**/.env" && lowerBase === ".env") deny(glob, rel);
-    if (glob === "**/.env.*" && lowerBase.startsWith(".env.")) deny(glob, rel);
-    if (glob === "**/id_rsa" && lowerBase === "id_rsa") deny(glob, rel);
-    if (glob === "**/id_ed25519" && lowerBase === "id_ed25519") deny(glob, rel);
-    if (glob === "**/*token*" && lowerBase.includes("token")) deny(glob, rel);
-    if (glob === "**/*secret*" && lowerBase.includes("secret")) deny(glob, rel);
-    if (glob === "**/key.txt" && lowerBase === "key.txt") deny(glob, rel);
-    if (glob === "**/*.key" && lowerExt === ".key") deny(glob, rel);
-    if (glob === "**/*.pem" && lowerExt === ".pem") deny(glob, rel);
-    if (glob === "**/appdata/**" && parts.includes("appdata")) deny(glob, rel);
-    if (glob === "**/.git/config" && lowerPath.endsWith(".git/config")) deny(glob, rel);
+  const parts = rel.split("/");
+  // Also reject denied parent directories (not only files beneath them).
+  for (let i = 1; i <= parts.length; i++) {
+    const part = parts.slice(0, i).join("/");
+    if (matcher(part) || matcher(part + "/")) {
+      throw new AccessDeniedError(`Path is blocked by deny globs: ${rel}`);
+    }
   }
 }
 
-function deny(glob: string, path: string): never {
-  throw new AccessDeniedError(`Path is blocked by deny globs (${glob}): ${path}`);
+/** Find the existing parent for new files so symlink/junction escapes are detected. */
+export async function assertRealWorkspacePath(path: string, root: string, allowedRoots: string[], denyGlobs: string[]): Promise<void> {
+  const candidate = resolveWorkspacePath(root, path);
+  assertAllowedPath(candidate, allowedRoots);
+  assertNotDenied(candidate, root, denyGlobs);
+  const realRoot = await realpath(root);
+  let existing = candidate;
+  for (;;) {
+    try { await realpath(existing); break; }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      const parent = dirname(existing);
+      if (parent === existing) throw new AccessDeniedError("Cannot resolve a safe parent.");
+      existing = parent;
+    }
+  }
+  const canonical = resolve(await realpath(existing), relative(existing, candidate));
+  if (!isInsideRoot(canonical, realRoot)) throw new AccessDeniedError("Symlink or junction escapes the workspace.");
+  const roots = await Promise.all(allowedRoots.map(async value => {
+    try { return await realpath(value); } catch { return resolve(value); }
+  }));
+  assertAllowedPath(canonical, roots);
+  assertNotDenied(canonical, realRoot, denyGlobs);
 }

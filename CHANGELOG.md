@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased (2026-11-05)
+
+- Permit PowerShell / PowerShell 7 `-Command` and workspace `.ps1` in `full` mode with targeted destructive-operation checks; keep other shells blocked.
+
+- Avoid false command-policy matches in literal argv and run Windows npm/pnpm/yarn through installed Node CLI entrypoints without enabling a shell.
+- Enforce configurable deny globs, canonical workspace/junction boundaries and collision checks between edit preview and confirmation.
+- Bound process-output memory, large-file reads and recursive directory output; reclaim old pending edits, workspaces and managed processes.
+- Add regression tests for command false positives, multibyte output, path escapes and edit conflicts.
+
 ## v0.6.4 (2026-10-31)
 
 ### Fixes

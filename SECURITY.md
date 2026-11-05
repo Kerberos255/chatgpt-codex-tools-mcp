@@ -13,9 +13,8 @@ private; Tailscale Funnel must expose only the OAuth gateway, not MCP directly.
 - Workspaces must be under `CTM_ALLOWED_ROOTS`.
 - Built-in and user-defined deny globs block common private files and paths.
 - File and SQLite writes require preview followed by explicit confirmation.
-- There is no shell tool. Process tools use structured executable + argv input.
-- Direct shell executables and dangerous process patterns are blocked in every
-  access mode.
+- Processes run with structured argv. `cmd`, `sh` and `bash` remain blocked.
+- In `full` mode, PowerShell `-Command` and allowlisted-root `.ps1` scripts use targeted destructive-operation checks. PowerShell still has the process user's privileges, and this is **not a sandbox**.
 - Process environment variables with secret-like names are removed before spawn.
 - Tool output passes through best-effort secret redaction.
 - Web and SQLite capabilities are disabled by default and separately gated.
@@ -24,10 +23,9 @@ private; Tailscale Funnel must expose only the OAuth gateway, not MCP directly.
 ## Access modes
 
 - `review` allows only a small inspection/test process allowlist.
-- `full` allows broader structured executables, but still blocks direct shells
-  and dangerous argument patterns.
+- `full` allows guarded PowerShell scripting and broader executables. Treat this as arbitrary-code execution: static filters cannot isolate arbitrary scripts.
 
-`full` is not equivalent to unrestricted shell access.
+Use narrow authenticated private ingress; do not rely on keyword filtering for security isolation.
 
 ## Required deployment practices
 
