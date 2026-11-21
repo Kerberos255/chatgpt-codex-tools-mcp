@@ -1,5 +1,7 @@
-import { lookup } from "node:dns/promises";
-import { isIP } from "node:net";
+import { Agent } from "undici";
+import { validatePublicUrl, createPinnedAgent } from "./public-fetch-policy.js";
+import { createRequire } from "node:module";
+const packageVersion = (createRequire(import.meta.url)("../package.json") as { version: string }).version;
 import type { Config } from "./config.js";
 
 export interface SearchResult {
@@ -48,12 +50,12 @@ export async function webSearch(config: Config, query: string, limit: number): P
   endpoint.searchParams.set("q", query);
   endpoint.searchParams.set("format", "json");
 
-  const response = await fetchWithTimeout(endpoint.toString(), config.webTimeoutMs);
-  if (!response.ok) {
-    throw new Error(`SearXNG search failed: HTTP ${response.status}`);
-  }
+  const data = await withAbortDeadline(config.webTimeoutMs, async signal => {
+    const response = await fetchWithSignal(endpoint.toString(), signal);
+    if (!response.ok) throw new Error(`SearXNG search failed: HTTP ${response.status}`);
+    return await response.json() as { results?: Array<Record<string, unknown>> };
+  });
 
-  const data = await response.json() as { results?: Array<Record<string, unknown>> };
   return (data.results || []).slice(0, Math.max(1, Math.min(limit, 10))).map((item) => ({
     title: String(item.title || ""),
     url: String(item.url || ""),
@@ -64,31 +66,41 @@ export async function webSearch(config: Config, query: string, limit: number): P
 
 export async function webFetch(config: Config, inputUrl: string): Promise<FetchResult> {
   ensureWebToolsEnabled(config);
-  let current = await assertPublicFetchUrl(inputUrl);
+  return withAbortDeadline(config.webTimeoutMs, async signal => {
+    let target = await validatePublicUrl(inputUrl);
+    for (let redirectCount = 0; redirectCount <= 5; redirectCount += 1) {
+      // The dispatcher never performs an unrestricted second DNS lookup.
+      const dispatcher = createPinnedAgent(target.addresses);
+      try {
+        const response = await fetchWithSignal(target.url.toString(), signal, {
+          redirect: "manual",
+          dispatcher,
+        } as RequestInit & { dispatcher: Agent });
+        if (response.status >= 300 && response.status < 400) {
+          const location = response.headers.get("location");
+          await response.body?.cancel();
+          if (!location) throw new Error(`Redirect response missing Location header: HTTP ${response.status}`);
+          target = await validatePublicUrl(new URL(location, target.url).toString());
+          continue;
+        }
 
-  for (let redirectCount = 0; redirectCount <= 5; redirectCount += 1) {
-    const response = await fetchWithTimeout(current.toString(), config.webTimeoutMs, { redirect: "manual" });
-    if (response.status >= 300 && response.status < 400) {
-      const location = response.headers.get("location");
-      if (!location) throw new Error(`Redirect response missing Location header: HTTP ${response.status}`);
-      current = await assertPublicFetchUrl(new URL(location, current).toString());
-      continue;
+        const contentType = response.headers.get("content-type") || "";
+        const body = await readBodyCapped(response, config.webMaxBytes);
+        const text = decodeUtf8(body.bytes);
+        return {
+          finalUrl: target.url.toString(),
+          status: response.status,
+          contentType,
+          title: extractTitle(text),
+          text,
+          truncated: body.truncated,
+        };
+      } finally {
+        dispatcher.destroy();
+      }
     }
-
-    const contentType = response.headers.get("content-type") || "";
-    const body = await readBodyCapped(response, config.webMaxBytes);
-    const text = decodeUtf8(body.bytes);
-    return {
-      finalUrl: current.toString(),
-      status: response.status,
-      contentType,
-      title: extractTitle(text),
-      text,
-      truncated: body.truncated,
-    };
-  }
-
-  throw new Error("Too many redirects.");
+    throw new Error("Too many redirects.");
+  });
 }
 
 function ensureWebToolsEnabled(config: Config): void {
@@ -108,74 +120,27 @@ function makeSearxngSearchUrl(baseUrl: string): URL {
   return base;
 }
 
-async function assertPublicFetchUrl(inputUrl: string): Promise<URL> {
-  const url = new URL(inputUrl);
-  if (!["http:", "https:"].includes(url.protocol)) throw new Error('web(action="fetch") only supports http and https URLs.');
-  if (url.username || url.password) throw new Error('web(action="fetch") URLs must not include credentials.');
-
-  const host = url.hostname.toLowerCase();
-  if (!host || host === "localhost" || host.endsWith(".localhost")) throw new Error('web(action="fetch") cannot access localhost.');
-
-  if (isIP(host)) {
-    if (isPrivateAddress(host)) throw new Error('web(action="fetch") cannot access private or local network addresses.');
-    return url;
-  }
-
-  const addresses = await lookup(host, { all: true, verbatim: false });
-  if (addresses.length === 0) throw new Error(`Unable to resolve host: ${host}`);
-  if (addresses.some((entry) => isPrivateAddress(entry.address))) {
-    throw new Error('web(action="fetch") cannot access hosts that resolve to private or local network addresses.');
-  }
-  return url;
-}
-
-function isPrivateAddress(address: string): boolean {
-  const ipv4 = parseMappedIpv4(address) || (isIP(address) === 4 ? address : "");
-  if (ipv4) return isPrivateIpv4(ipv4);
-  if (isIP(address) === 6) return isPrivateIpv6(address);
-  return true;
-}
-
-function parseMappedIpv4(address: string): string {
-  const match = address.toLowerCase().match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
-  return match ? match[1] : "";
-}
-
-function isPrivateIpv4(address: string): boolean {
-  const parts = address.split(".").map((part) => Number(part));
-  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) return true;
-  const [a, b] = parts;
-  if (a === 0 || a === 10 || a === 127) return true;
-  if (a === 100 && b >= 64 && b <= 127) return true;
-  if (a === 169 && b === 254) return true;
-  if (a === 172 && b >= 16 && b <= 31) return true;
-  if (a === 192 && b === 168) return true;
-  if (a === 198 && (b === 18 || b === 19)) return true;
-  if (a >= 224) return true;
-  return false;
-}
-
-function isPrivateIpv6(address: string): boolean {
-  const normalized = address.toLowerCase();
-  return normalized === "::" || normalized === "::1" || normalized.startsWith("fe80:") || normalized.startsWith("fc") || normalized.startsWith("fd") || normalized.startsWith("ff");
-}
-
-async function fetchWithTimeout(url: string, timeoutMs: number, init: RequestInit = {}): Promise<Response> {
+/** A deadline covering headers and response-body consumption. */
+export async function withAbortDeadline<T>(timeoutMs: number, fn: (signal: AbortSignal) => Promise<T>): Promise<T> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    return await fetch(url, {
-      ...init,
-      method: "GET",
-      headers: {
-        "user-agent": "chatgpt-codex-tools-mcp/0.1",
-        accept: "text/html,application/json,text/plain,application/xml;q=0.9,*/*;q=0.5",
-      },
-      signal: controller.signal,
-    });
+    return await fn(controller.signal);
   } finally {
     clearTimeout(timer);
   }
+}
+
+async function fetchWithSignal(url: string, signal: AbortSignal, init: RequestInit = {}): Promise<Response> {
+  return fetch(url, {
+    ...init,
+    method: "GET",
+    headers: {
+      "user-agent": `chatgpt-codex-tools-mcp/${packageVersion}`,
+      accept: "text/html,application/json,text/plain,application/xml;q=0.9,*/*;q=0.5",
+    },
+    signal,
+  });
 }
 
 async function readBodyCapped(response: Response, maxBytes: number): Promise<{ bytes: Uint8Array; truncated: boolean }> {

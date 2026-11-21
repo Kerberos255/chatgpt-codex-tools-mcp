@@ -69,20 +69,36 @@ export interface PendingSqliteChange {
 
 // --- Store ---
 
-class SqliteChangeStore {
+export class SqliteChangeStore {
   private readonly changes = new Map<string, PendingSqliteChange>();
 
+  constructor(
+    private readonly max = 128,
+    private readonly ttlMs = 10 * 60_000,
+    private readonly now: () => number = Date.now,
+  ) {}
+
   create(input: Omit<PendingSqliteChange, "id" | "createdAt">): PendingSqliteChange {
-    const entry = { ...input, id: `sqlite_${randomUUID()}`, createdAt: Date.now() };
+    this.prune();
+    if (this.changes.size >= this.max) throw new Error("Too many pending SQLite changes.");
+    const entry = { ...input, id: `sqlite_${randomUUID()}`, createdAt: this.now() };
     this.changes.set(entry.id, entry);
     return entry;
   }
 
   take(actionId: string): PendingSqliteChange {
+    this.prune();
     const entry = this.changes.get(actionId);
-    if (!entry) throw new Error(`Unknown sqlite actionId: ${actionId}`);
+    if (!entry) throw new Error(`Unknown or expired sqlite actionId: ${actionId}`);
     this.changes.delete(actionId);
     return entry;
+  }
+
+  private prune(): void {
+    const cutoff = this.now() - this.ttlMs;
+    for (const [id, entry] of this.changes) {
+      if (entry.createdAt <= cutoff) this.changes.delete(id);
+    }
   }
 }
 

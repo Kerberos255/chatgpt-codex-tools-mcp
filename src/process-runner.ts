@@ -1,5 +1,7 @@
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
+import { truncateUtf8 } from "./text.js";
+import { killTree } from "./process-tree.js";
 import { delimiter, dirname, join } from "node:path";
 import { assertPowerShellAllowed, type PowerShellPolicyContext } from "./powershell-policy.js";
 import type { AccessMode } from "./config.js";
@@ -104,12 +106,10 @@ export class BoundedOutput {
   }
   text(): string {
     const marker = "\n[output truncated]\n";
-    const allowance = Math.max(0, this.maxBytes - (this.truncated ? Buffer.byteLength(marker) : 0));
-    let value = Buffer.concat(this.chunks, this.count).subarray(0, allowance).toString("utf8");
-    // An incomplete trailing UTF-8 sequence may decode to a 3-byte replacement character.
-    while (Buffer.byteLength(value, "utf8") > allowance) value = value.slice(0, -1);
-    if (!this.truncated || this.maxBytes < Buffer.byteLength(marker)) return value;
-    return value + marker;
+    const all = Buffer.concat(this.chunks, this.count);
+    const markerBytes = Buffer.byteLength(marker);
+    if (!this.truncated || this.maxBytes < markerBytes) return truncateUtf8(all, this.maxBytes);
+    return truncateUtf8(all, this.maxBytes - markerBytes) + marker;
   }
 }
 
@@ -134,13 +134,13 @@ export async function runProcess(input: {
     const stdout = new BoundedOutput(input.maxOutputBytes);
     const stderr = new BoundedOutput(input.maxOutputBytes);
     const child = spawn(invocation.command, invocation.args, {
-      cwd: input.cwd, shell: false, windowsHide: true, env: scrubEnv(process.env),
+      cwd: input.cwd, shell: false, windowsHide: true, detached: process.platform !== "win32", env: scrubEnv(process.env),
     });
     let timedOut = false;
     let settled = false;
     const timer = setTimeout(() => {
       timedOut = true;
-      child.kill("SIGTERM");
+      killTree(child);
     }, input.timeoutMs);
     function finish(exitCode: number | null): void {
       if (settled) return;

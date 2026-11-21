@@ -7,9 +7,11 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import * as z from "zod/v4";
 import { loadConfig } from "./config.js";
 import { createGlobMatcher, splitGlobPatterns, type GlobMatcher } from "./globs.js";
+import { parseRipgrepOutputPath, normalizeRipgrepOutputLine } from "./ripgrep-output.js";
 import { assertNotDenied, relativeDisplayPath } from "./paths.js";
 import { EditStore, type Change, previewChanges, applyChanges, snapshotFiles, assertFilesUnchanged } from "./edit-store.js";
 import { ManagedProcessStore, type ManagedProcessSnapshot } from "./managed-processes.js";
+import { capText } from "./text.js";
 import { assertProcessAllowed, runProcess, type ProcessResult } from "./process-runner.js";
 import { redactText, redactValue } from "./redaction.js";
 import {
@@ -773,56 +775,20 @@ async function gitDiffTool(
   if (options.staged) baseArgs.push("--cached");
   const pathArgs = pathspec ? ["--", pathspec] : [];
 
-  const statResult = await runProcess({
+  const args = [...baseArgs, options.statOnly ? "--stat" : "--patch-with-stat", ...pathArgs];
+  const result = await runProcess({
     command: "git",
-    args: [...baseArgs, "--stat", ...pathArgs],
+    args,
     cwd: workspace.root,
     timeoutMs: 30_000,
     maxOutputBytes: maxBytes,
   });
-
-  if (statResult.exitCode !== 0 || options.statOnly) {
-    return textResult(formatProcessResult(statResult), {
-      ...statResult,
-      staged: options.staged,
-      path: pathspec,
-      statOnly: options.statOnly,
-    });
-  }
-
-  const diffResult = await runProcess({
-    command: "git",
-    args: [...baseArgs, ...pathArgs],
-    cwd: workspace.root,
-    timeoutMs: 30_000,
-    maxOutputBytes: maxBytes,
-  });
-  const result = combineProcessResults([statResult, diffResult], maxBytes);
   return textResult(formatProcessResult(result), {
     ...result,
     staged: options.staged,
     path: pathspec,
     statOnly: options.statOnly,
   });
-}
-
-function combineProcessResults(results: ProcessResult[], maxBytes: number): ProcessResult {
-  return {
-    stdout: capText(results.map((result) => result.stdout.trimEnd()).filter(Boolean).join("\n\n"), maxBytes),
-    stderr: capText(results.map((result) => result.stderr.trimEnd()).filter(Boolean).join("\n\n"), maxBytes),
-    exitCode: results.find((result) => result.exitCode !== 0)?.exitCode ?? results[results.length - 1]?.exitCode ?? null,
-    timedOut: results.some((result) => result.timedOut),
-  };
-}
-
-function capText(text: string, maxBytes: number): string {
-  const bytes = Buffer.from(text);
-  if (bytes.byteLength <= maxBytes) return text;
-  const marker = "\n[output truncated]\n";
-  const allowance = Math.max(0, maxBytes - Buffer.byteLength(marker));
-  let prefix = bytes.subarray(0, allowance).toString("utf8");
-  while (Buffer.byteLength(prefix, "utf8") > allowance) prefix = prefix.slice(0, -1);
-  return prefix + (maxBytes >= Buffer.byteLength(marker) ? marker : "");
 }
 
 // --- Result helper ---
@@ -931,7 +897,7 @@ async function searchTextFiles(
       for (const entry of entries) {
         if (entry.isSymbolicLink() || ["node_modules", "dist", ".git"].includes(entry.name)) continue;
         const childRel = relBase ? `${relBase}/${entry.name}` : entry.name;
-        if (excludeMatcher && (excludeMatcher(childRel) || excludeMatcher(`${childRel}/`))) continue;
+        if (excludeMatcher && (excludeMatcher(childRel))) continue;
         await walk(join(path, entry.name), childRel);
       }
       return;
@@ -981,7 +947,7 @@ async function searchTextFiles(
 
   const output = lines.slice(0, maxMatches).join("\n");
   if (Buffer.byteLength(output, "utf8") <= config.maxOutputBytes) return output;
-  return output.slice(0, config.maxOutputBytes) + "\n[output truncated]\n";
+  return capText(output, config.maxOutputBytes);
 
   function pushSearchLine(line: string): void {
     if (lines.length >= maxMatches || outputBytes > config.maxOutputBytes) return;
@@ -1006,6 +972,7 @@ async function searchTextFilesWithRipgrep(
     "never",
     "--line-number",
     "--no-heading",
+    "--null",
     "--with-filename",
     "--fixed-strings",
   ];
@@ -1060,23 +1027,6 @@ function filterRipgrepOutputLines(workspaceRoot: string, lines: string[], maxLin
   }
   while (output[output.length - 1] === "--") output.pop();
   return output;
-}
-
-function parseRipgrepOutputPath(line: string): string | null {
-  const match = /^(.+?)(?::|-)\d+(?::|-)/.exec(line);
-  return match ? normalizeToolPath(match[1]) : null;
-}
-
-function normalizeRipgrepOutputLine(line: string): string {
-  const match = /^(.+?)(?=[:|-]\d+[:|-])/.exec(line);
-  if (!match) return line;
-  return `${normalizeToolPath(match[1])}${line.slice(match[1].length)}`;
-}
-
-function normalizeToolPath(path: string): string {
-  let normalized = path.replace(/\\/g, "/");
-  while (normalized.startsWith("./")) normalized = normalized.slice(2);
-  return normalized;
 }
 
 // --- files(action="find") helpers ---
@@ -1199,7 +1149,6 @@ app.use((req, res, next) => {
   next();
 });
 app.use(express.json({ limit: "4mb" }));
-app.use(express.urlencoded({ extended: false }));
 app.get("/healthz", (_req, res) => res.json({ ok: true, name: "chatgpt-codex-tools-mcp" }));
 
 // Stateless Streamable HTTP keeps ChatGPT windows independent from in-memory MCP

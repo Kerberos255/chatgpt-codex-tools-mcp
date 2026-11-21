@@ -1,6 +1,23 @@
 # Changelog
 
-## Unreleased (2026-11-05)
+## Unreleased (2026-11-22)
+
+### Safety and correctness
+
+- Plan ordered file edits in memory before writing, produce bounded content diffs, stage writes before replacement and attempt rollback on partial failures.
+- Treat replacement strings literally, reject ambiguous or empty matches on existing files, preserve CRLF in line replacements and surface unreadable files.
+- Resolve ripgrep paths with NUL separators, preserving numeric-dashed filenames during deny-glob filtering.
+- Extend web timeouts through response bodies; validate all resolved addresses and pin outgoing connections to vetted IPs to defend against DNS rebinding, including IPv4-mapped and translated IPv6.
+- End whole subprocess trees on timeout or stop, including Windows descendants.
+- Bound pending SQLite changes by count and expiration.
+
+### Performance and maintenance
+
+- Use one Git diff invocation with patch and stat, share UTF-8-safe byte capping, and report the actual version in web requests.
+- Update dependency locks to resolve known npm advisory findings without major-version upgrades; retain the nine-tool MCP interface and stateless HTTP sessions.
+- Expand Windows regression tests for edit batching, filesystem conflicts, child process cleanup, web deadlines, address checks and Unicode output.
+
+### Previous unreleased maintenance (2026-11-05)
 
 - Permit PowerShell / PowerShell 7 `-Command` and workspace `.ps1` in `full` mode with targeted destructive-operation checks; keep other shells blocked.
 
