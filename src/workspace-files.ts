@@ -239,22 +239,35 @@ async function searchTextFilesWithRipgrep(
     output = output.slice(0, output.lastIndexOf("\n") + 1);
   }
   const lines = output.split(/\r?\n/).filter(line => line.length > 0);
-  const filteredLines = filterRipgrepOutputLines(config.denyGlobs, workspaceRoot, lines, maxMatches);
+  const filteredLines = await filterRipgrepOutputLines(config.denyGlobs, workspaceRoot, lines, maxMatches);
   const formatted = filteredLines.join("\n") + (result.outputLimitReached ? "\n[search output truncated]" : "");
   return capText(formatted, config.maxOutputBytes);
 }
 
-function filterRipgrepOutputLines(denyGlobs: string[], workspaceRoot: string, lines: string[], maxLines: number): string[] {
+async function filterRipgrepOutputLines(denyGlobs: string[], workspaceRoot: string, lines: string[], maxLines: number): Promise<string[]> {
   const output: string[] = [];
+  const canonicalRoot = await realpath(workspaceRoot);
+  const checked = new Map<string, boolean>();
   for (const line of lines) {
     const relPath = parseRipgrepOutputPath(line);
     if (!relPath && line !== "--") continue;
     if (relPath) {
-      try {
-        assertNotDenied(join(workspaceRoot, relPath), workspaceRoot, denyGlobs);
-      } catch {
-        continue;
+      if (!checked.has(relPath)) {
+        let allowed = false;
+        try {
+          const candidate = join(workspaceRoot, relPath);
+          if (isInsideRoot(candidate, workspaceRoot)) {
+            assertNotDenied(candidate, workspaceRoot, denyGlobs);
+            const canonical = await realpath(candidate);
+            if (isInsideRoot(canonical, canonicalRoot)) {
+              assertNotDenied(canonical, canonicalRoot, denyGlobs);
+              allowed = true;
+            }
+          }
+        } catch { /* Unresolved or denied paths cannot appear in output. */ }
+        checked.set(relPath, allowed);
       }
+      if (!checked.get(relPath)) continue;
     }
     if (line === "--" && (output.length === 0 || output[output.length - 1] === "--")) continue;
     output.push(normalizeRipgrepOutputLine(line));

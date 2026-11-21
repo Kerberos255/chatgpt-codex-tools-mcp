@@ -120,7 +120,7 @@ export class EditStore {
   }
 }
 
-export { previewChanges, applyChanges } from "./edit-planner.js";
+export { previewChanges, previewChangesWithFingerprints, applyChanges } from "./edit-planner.js";
 
 // --- Helpers ---
 

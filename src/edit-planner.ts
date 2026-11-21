@@ -1,19 +1,38 @@
-import { randomUUID } from "node:crypto";
-import { chmod, mkdir, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
+import { chmod, lstat, mkdir, readFile, realpath, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { dirname, relative, resolve } from "node:path";
-import type { Change, DiffEntry } from "./edit-store.js";
+import { isInsideRoot, resolveWorkspacePath } from "./paths.js";
+import type { Change, DiffEntry, FileFingerprint } from "./edit-store.js";
 import { capText } from "./text.js";
 
-type FileState = { path: string; before: string | null; after: string | null };
+type FileState = { path: string; before: Buffer | null; after: Buffer | null };
+const equal = (a: Buffer | null, b: Buffer | null): boolean => a === null ? b === null : b !== null && a.equals(b);
+const MAX_EDIT_FILE_BYTES = 16 * 1024 * 1024;
 type Plan = { files: FileState[]; diffs: DiffEntry[] };
 const DIFF_LIMIT = 32_000;
 
-async function readMaybe(path: string): Promise<string | null> {
-  try { return await readFile(path, "utf8"); }
+async function readMaybe(path: string): Promise<Buffer | null> {
+  try {
+    const info = await lstat(path);
+    if (!info.isFile() || info.isSymbolicLink()) throw new Error("Edits require regular files, not links or directories.");
+    if (info.size > MAX_EDIT_FILE_BYTES) throw new Error("File exceeds the 16 MiB edit snapshot limit.");
+    const bytes = await readFile(path);
+    if (bytes.length > MAX_EDIT_FILE_BYTES) throw new Error("File exceeds the 16 MiB edit snapshot limit.");
+    return bytes;
+  }
   catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
     throw error;
   }
+}
+
+function textContent(bytes: Buffer | null): string | null {
+  if (bytes === null) return null;
+  const text = bytes.toString("utf8");
+  if (bytes.includes(0) || !Buffer.from(text, "utf8").equals(bytes)) {
+    throw new Error("Binary or non-UTF-8 file: only rename or delete is supported.");
+  }
+  return text;
 }
 
 function requireContent(value: string | null, path: string): string {
@@ -97,46 +116,118 @@ function diffFor(path: string, before: string | null, after: string | null): str
     `--- ${before === null ? "(new file)" : path}`,
     `+++ ${after === null ? "(deleted)" : path}`,
     `@@ -${contextStart + 1},${contextEndOld - contextStart} +${contextStart + 1},${contextEndNew - contextStart} @@`,
-    ...oldLines.slice(contextStart, prefix).map(line => " " + line),
-    ...oldLines.slice(prefix, oldEnd).map(line => "-" + line),
-    ...newLines.slice(prefix, newEnd).map(line => "+" + line),
-    ...oldLines.slice(oldEnd, contextEndOld).map(line => " " + line),
   ];
+  let bytes = Buffer.byteLength(lines.join("\n"));
+  function append(values: string[], start: number, end: number, marker: string): boolean {
+    for (let i = start; i < end; i++) {
+      const line = marker + values[i];
+      const available = DIFF_LIMIT - bytes - 1;
+      if (Buffer.byteLength(line) > available) {
+        lines.push(capText(line, Math.max(0, available)));
+        return false;
+      }
+      lines.push(line);
+      bytes += Buffer.byteLength(line) + 1;
+    }
+    return true;
+  }
+  if (!append(oldLines, contextStart, prefix, " ") ||
+      !append(oldLines, prefix, oldEnd, "-") ||
+      !append(newLines, prefix, newEnd, "+") ||
+      !append(oldLines, oldEnd, contextEndOld, " ")) {
+    return capText(lines.join("\n") + "\n[diff truncated]", DIFF_LIMIT);
+  }
   return capText(lines.join("\n"), DIFF_LIMIT);
 }
 
 /** Plan every change against a virtual filesystem before any disk mutation. */
 export async function planChanges(root: string, changes: Change[]): Promise<Plan> {
-  const before = new Map<string, string | null>();
-  const virtual = new Map<string, string | null>();
+  const before = new Map<string, Buffer | null>();
+  const virtual = new Map<string, Buffer | null>();
+  const names = new Map<string, string>();
+  let totalSnapshotBytes = 0;
   const diffs: DiffEntry[] = [];
-  async function get(path: string): Promise<string | null> {
-    if (!virtual.has(path)) {
-      const content = await readMaybe(resolve(root, path));
-      before.set(path, content);
-      virtual.set(path, content);
+  const canonicalRoot = await realpath(root);
+  const keyOf = (path: string) => process.platform === "win32" ? path.toLowerCase() : path;
+  async function keyFor(input: string): Promise<string> {
+    const path = resolveWorkspacePath(root, input);
+    const rel = relative(root, path);
+    if (!rel) throw new Error("Cannot edit the workspace root.");
+    let ancestor = path;
+    let canonical: string;
+    for (;;) {
+      try { canonical = await realpath(ancestor); break; }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        const parent = dirname(ancestor);
+        if (parent === ancestor) throw error;
+        ancestor = parent;
+      }
     }
-    return virtual.get(path) ?? null;
+    const target = resolve(canonical, relative(ancestor, path));
+    if (!isInsideRoot(target, canonicalRoot) ||
+        keyOf(target) !== keyOf(resolve(canonicalRoot, rel))) {
+      throw new Error("Edit path resolves through an alias or junction. Use the canonical workspace-relative path.");
+    }
+    const key = keyOf(rel);
+    if (names.has(key) && names.get(key) !== rel) throw new Error("Use consistent casing for paths within one edit batch.");
+    if (!names.has(key)) names.set(key, rel);
+    return key;
+  }
+  async function get(key: string): Promise<Buffer | null> {
+    if (!virtual.has(key)) {
+      const content = await readMaybe(resolve(root, names.get(key)!));
+      totalSnapshotBytes += content?.length ?? 0;
+      if (totalSnapshotBytes > 64 * 1024 * 1024) throw new Error("Edit batch exceeds the 64 MiB snapshot limit.");
+      before.set(key, content);
+      virtual.set(key, content);
+    }
+    return virtual.get(key) ?? null;
   }
 
   for (const change of changes) {
-    const current = await get(change.path);
+    const key = await keyFor(change.path);
+    const current = await get(key);
     if (change.type === "rename") {
       const newPath = change.newPath;
-      if (!newPath || newPath === change.path) throw new Error("newPath must differ from the source");
-      requireContent(current, change.path);
-      if (await get(newPath) !== null) throw new Error(`Target already exists: ${newPath}`);
-      virtual.set(change.path, null);
-      virtual.set(newPath, current);
+      if (!newPath) throw new Error("newPath must differ from the source");
+      const target = await keyFor(newPath);
+      if (target === key) throw new Error("newPath must differ from the source");
+      if (current === null) throw new Error(`File does not exist: ${change.path}`);
+      if (await get(target) !== null) throw new Error(`Target already exists: ${newPath}`);
+      virtual.set(key, null);
+      virtual.set(target, current);
       diffs.push({ path: change.path, type: "rename", diff: `Rename: ${change.path} → ${newPath}` });
+    } else if (change.type === "delete") {
+      if (current === null) throw new Error(`File does not exist: ${change.path}`);
+      virtual.set(key, null);
+      let diff: string;
+      try { diff = diffFor(change.path, textContent(current), null); }
+      catch { diff = `Delete binary/non-UTF-8 file (${current.length} bytes)`; }
+      diffs.push({ path: change.path, type: "delete", diff });
     } else {
-      const next = computeNext(current, change);
-      virtual.set(change.path, next);
+      const previous = textContent(current);
+      const next = computeNext(previous, change);
+      const after = next === null ? null : Buffer.from(next, "utf8");
+      if (after && after.length > MAX_EDIT_FILE_BYTES) throw new Error("Edited file exceeds the 16 MiB limit.");
+      virtual.set(key, after);
       diffs.push({ path: change.path, type: current === null && change.type === "replace_text" ? "create" : change.type,
-        diff: diffFor(change.path, current, next) });
+        diff: diffFor(change.path, previous, next) });
     }
   }
-  return { files: [...virtual].map(([path, after]) => ({ path, before: before.get(path) ?? null, after })), diffs };
+  return { files: [...virtual].map(([key, after]) => ({ path: names.get(key)!, before: before.get(key) ?? null, after })), diffs };
+}
+
+function fingerprintsFor(plan: Plan): FileFingerprint[] {
+  return plan.files.map(file => ({
+    path: file.path,
+    digest: file.before === null ? null : createHash("sha256").update(file.before).digest("hex"),
+  }));
+}
+
+export async function previewChangesWithFingerprints(root: string, changes: Change[]): Promise<{diffs: DiffEntry[]; fingerprints: FileFingerprint[]}> {
+  const plan = await planChanges(root, changes);
+  return { diffs: plan.diffs, fingerprints: fingerprintsFor(plan) };
 }
 
 export async function previewChanges(root: string, changes: Change[]): Promise<DiffEntry[]> {
@@ -147,7 +238,7 @@ function temporaryPath(path: string): string {
   return `${path}.ctm-tmp-${randomUUID()}`;
 }
 
-async function restore(path: string, previous: string | null, priorMode?: number): Promise<void> {
+async function restore(path: string, previous: Buffer | null, priorMode?: number): Promise<void> {
   if (previous === null) {
     await unlink(path).catch(error => {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
@@ -167,6 +258,7 @@ async function restore(path: string, previous: string | null, priorMode?: number
 /** Inject failures into a private workspace test without changing the public MCP API. */
 export interface EditCommitHooks {
   beforeCommit?: (index: number) => void | Promise<void>;
+  expectedFingerprints?: readonly FileFingerprint[];
   /** Revalidate canonical workspace and deny-glob boundaries immediately before I/O. */
   validatePath?: (relativePath: string) => Promise<void>;
 }
@@ -174,7 +266,14 @@ export interface EditCommitHooks {
 /** Stage all writes first. Per-file renames are atomic; cross-file rollback is best effort. */
 export async function applyChanges(root: string, changes: Change[], hooks: EditCommitHooks = {}): Promise<void> {
   const plan = await planChanges(root, changes);
-  const updates = plan.files.filter(file => file.before !== file.after);
+  if (hooks.expectedFingerprints) {
+    const actual = fingerprintsFor(plan);
+    const expected = new Map(hooks.expectedFingerprints.map(file => [file.path, file.digest]));
+    if (expected.size !== actual.length || actual.some(file => !expected.has(file.path) || expected.get(file.path) !== file.digest)) {
+      throw new Error("File changed since preview. Preview again.");
+    }
+  }
+  const updates = plan.files.filter(file => !equal(file.before, file.after));
   const staged = new Map<string, string>();
   const priorModes = new Map<string, number>();
   const committed: FileState[] = [];
@@ -195,7 +294,7 @@ export async function applyChanges(root: string, changes: Change[], hooks: EditC
 
     // Catch ordinary concurrent modifications after planning, before touching any target.
     for (const file of updates) {
-      if (await readMaybe(resolve(root, file.path)) !== file.before) {
+      if (!equal(await readMaybe(resolve(root, file.path)), file.before)) {
         throw new Error(`File changed since preview: ${file.path}. Preview again.`);
       }
     }
@@ -205,7 +304,7 @@ export async function applyChanges(root: string, changes: Change[], hooks: EditC
       await hooks.validatePath?.(file.path);
       const path = resolve(root, file.path);
       // Recheck immediately before each operation, not only before the batch.
-      if (await readMaybe(path) !== file.before) {
+      if (!equal(await readMaybe(path), file.before)) {
         throw new Error(`File changed during commit: ${file.path}. Preview again.`);
       }
       if (file.after === null) await unlink(path);
@@ -219,7 +318,7 @@ export async function applyChanges(root: string, changes: Change[], hooks: EditC
         await hooks.validatePath?.(file.path);
         const path = resolve(root, file.path);
         // Do not silently overwrite another writer's changes while recovering.
-        if (await readMaybe(path) !== file.after) {
+        if (!equal(await readMaybe(path), file.after)) {
           throw new Error("File changed after commit; refusing to overwrite external changes");
         }
         await restore(path, file.before, priorModes.get(path));

@@ -2,6 +2,12 @@
 
 ## Unreleased (2026-11-22)
 
+### Pre-deployment acceptance
+
+- Bind edit confirmation to the same byte snapshot used to produce previews; reject stale plans, normalize path spellings, reject ambiguous aliases and non-UTF-8 text edits, and preserve original binary bytes on rename/delete rollback.
+- Bound edit snapshots, batch snapshots, and large line-count diffs; recheck canonical paths before returning ripgrep matches, including explicitly selected internal aliases.
+- Add targeted regression tests and an optional actual ripgrep integration test.
+
 ### File tooling and HTTP hardening
 
 - Extract workspace file helpers from the MCP registration module; stream directory entries for find and fallback search, preserving case-insensitive glob, hidden-file and ignore-file behavior for find.

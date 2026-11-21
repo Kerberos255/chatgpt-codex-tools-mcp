@@ -10,7 +10,7 @@ import { loadConfig } from "./config.js";
 import { createGlobMatcher } from "./globs.js";
 import { readFileCapped, searchTextFiles, findFilesByGlob, buildProjectTree } from "./workspace-files.js";
 import { assertNotDenied, relativeDisplayPath } from "./paths.js";
-import { EditStore, type Change, previewChanges, applyChanges, snapshotFiles, assertFilesUnchanged } from "./edit-store.js";
+import { EditStore, type Change, previewChangesWithFingerprints, applyChanges, assertFilesUnchanged } from "./edit-store.js";
 import { ManagedProcessStore, type ManagedProcessSnapshot } from "./managed-processes.js";
 import { capText } from "./text.js";
 import { assertProcessAllowed, runProcess } from "./process-runner.js";
@@ -500,8 +500,7 @@ function createMcpServer(): McpServer {
         assertPreviewEditPayload(typedChanges);
         await assertEditChangePaths(workspaceId, typedChanges);
         const { absolutePath } = await workspaces.resolveSafe(workspaceId, ".");
-        const fingerprints = await snapshotFiles(absolutePath, typedChanges);
-        const diffs = await previewChanges(absolutePath, typedChanges);
+        const { fingerprints, diffs } = await previewChangesWithFingerprints(absolutePath, typedChanges);
         const pending = edits.create({ workspaceId, changes: typedChanges, diffs, fingerprints });
         const combinedDiff = diffs.map((d) => `--- ${d.path} (${d.type}) ---\n${d.diff}`).join("\n\n");
         return textResult(`Pending edit: ${pending.id}\n\n${combinedDiff}`, {
@@ -517,6 +516,7 @@ function createMcpServer(): McpServer {
       const { absolutePath } = await workspaces.resolveSafe(pending.workspaceId, ".");
       await assertFilesUnchanged(absolutePath, pending.fingerprints);
       await applyChanges(absolutePath, pending.changes, {
+        expectedFingerprints: pending.fingerprints,
         validatePath: async path => { await workspaces.resolveSafe(pending.workspaceId, path); },
       });
       return textResult(`Applied ${pending.changes.length} change(s) from ${actionId}`, {
