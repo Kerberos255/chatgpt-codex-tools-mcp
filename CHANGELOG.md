@@ -1,12 +1,13 @@
 # Changelog
 
-## Unreleased (2026-11-22)
+## v0.6.4 (2026-11-22)
 
 ### Pre-deployment acceptance
 
 - Bind edit confirmation to the same byte snapshot used to produce previews; reject stale plans, normalize path spellings, reject ambiguous aliases and non-UTF-8 text edits, and preserve original binary bytes on rename/delete rollback.
 - Bound edit snapshots, batch snapshots, and large line-count diffs; recheck canonical paths before returning ripgrep matches, including explicitly selected internal aliases.
-- Add targeted regression tests and an optional actual ripgrep integration test.
+- Declare the process output-limit indicator in typed MCP responses and add strict SDK end-to-end tests for file, Git, edit and exec operations.
+- Add targeted regression tests and an actual ripgrep integration test when ripgrep is installed.
 
 ### File tooling and HTTP hardening
 
@@ -47,9 +48,7 @@
 - Bound process-output memory, large-file reads and recursive directory output; reclaim old pending edits, workspaces and managed processes.
 - Add regression tests for command false positives, multibyte output, path escapes and edit conflicts.
 
-## v0.6.4 (2026-10-31)
-
-### Fixes
+### Windows screenshot fixes
 
 - Capture physical-pixel bounds with per-monitor DPI awareness, fixing clipped screenshots under Windows display scaling.
 - Add window-relative crops through PrintWindow without requiring a screen DC or falling back to the desktop; require unambiguous same-session window selection.
