@@ -2,6 +2,13 @@
 
 ## Unreleased (2026-11-22)
 
+### File tooling and HTTP hardening
+
+- Extract workspace file helpers from the MCP registration module; stream directory entries for find and fallback search, preserving case-insensitive glob, hidden-file and ignore-file behavior for find.
+- Share directory filters, reject unsafe canonical paths and avoid duplicate realpath calls within a single validation without caching across requests. Keep UTF-8 reads intact at byte boundaries.
+- Add opt-in exact Host/Origin checks before MCP JSON parsing, rejecting untrusted forwarded Host headers while preserving existing tunnel defaults. Keep external authentication required.
+- Recheck the database allowlist before SQLite confirmation; enable unused-code checks in TypeScript and remove redundant declarations.
+
 ### Follow-up reliability and performance
 
 - Revalidate workspace and junction boundaries immediately before edit staging, each commit and rollback; preserve original modes and guard against overwriting concurrent external edits.

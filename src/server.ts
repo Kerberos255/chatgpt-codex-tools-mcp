@@ -1,18 +1,19 @@
-import { open, readdir, stat } from "node:fs/promises";
+import { readdir, stat } from "node:fs/promises";
 import { createRequire } from "node:module";
-import { join, relative, sep, resolve as pathResolve } from "node:path";
+import { join } from "node:path";
 import express from "express";
+import { createHttpGuard } from "./http-guard.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import * as z from "zod/v4";
 import { loadConfig } from "./config.js";
-import { createGlobMatcher, splitGlobPatterns, type GlobMatcher } from "./globs.js";
-import { parseRipgrepOutputPath, normalizeRipgrepOutputLine } from "./ripgrep-output.js";
+import { createGlobMatcher } from "./globs.js";
+import { readFileCapped, searchTextFiles, findFilesByGlob, buildProjectTree } from "./workspace-files.js";
 import { assertNotDenied, relativeDisplayPath } from "./paths.js";
 import { EditStore, type Change, previewChanges, applyChanges, snapshotFiles, assertFilesUnchanged } from "./edit-store.js";
 import { ManagedProcessStore, type ManagedProcessSnapshot } from "./managed-processes.js";
 import { capText } from "./text.js";
-import { assertProcessAllowed, runProcess, type ProcessResult } from "./process-runner.js";
+import { assertProcessAllowed, runProcess } from "./process-runner.js";
 import { redactText, redactValue } from "./redaction.js";
 import {
   sqliteSchema,
@@ -402,7 +403,7 @@ function createMcpServer(): McpServer {
 
       if (action === "list") {
         if (recursive) {
-          const tree = await buildProjectTree(workspace.root, absolutePath, 0, depth);
+          const tree = await buildProjectTree(config, workspace.root, absolutePath, 0, depth);
           return textResult(tree || "(empty)", { action, path: displayPath, recursive, depth });
         }
         const entries = await readdir(absolutePath, { withFileTypes: true });
@@ -427,6 +428,7 @@ function createMcpServer(): McpServer {
         const includeMatcher = include ? createGlobMatcher(include, { matchBasename: true }) : null;
         const excludeMatcher = exclude ? createGlobMatcher(exclude, { matchBasename: true }) : null;
         const output = await searchTextFiles(
+          config,
           workspace.root,
           absolutePath,
           pattern,
@@ -442,8 +444,8 @@ function createMcpServer(): McpServer {
       }
 
       const matcher = createGlobMatcher(pattern, { matchBasename: true });
-      const results = await findFilesByGlob(workspace.root, absolutePath, matcher, maxResults);
-      return textResult(results.length > 0 ? results.join("\n") : "(no matching files)", { action, path: displayPath });
+      const results = await findFilesByGlob(config, workspace.root, absolutePath, matcher, maxResults);
+      return textResult(capText(results.length > 0 ? results.join("\n") : "(no matching files)", config.maxOutputBytes), { action, path: displayPath });
     },
   );
 
@@ -835,307 +837,6 @@ function managedProcessResult(snapshot: ManagedProcessSnapshot) {
   );
 }
 
-// --- File reading ---
-
-async function readFileCapped(path: string, maxBytes: number): Promise<{ text: string; truncated: boolean }> {
-  const handle = await open(path, "r");
-  try {
-    const info = await handle.stat();
-    if (!info.isFile()) throw new Error("Only regular files can be read.");
-    const limit = Math.min(info.size, maxBytes);
-    const buffer = Buffer.alloc(limit);
-    let received = 0;
-    while (received < limit) {
-      const value = await handle.read(buffer, received, limit - received, received);
-      if (!value.bytesRead) break;
-      received += value.bytesRead;
-    }
-    const truncated = info.size > received;
-    return { text: buffer.subarray(0, received).toString("utf8") + (truncated ? "\n[file truncated]\n" : ""), truncated };
-  } finally { await handle.close(); }
-}
-
-// --- Enhanced search_text_files ---
-
-async function searchTextFiles(
-  workspaceRoot: string,
-  startPath: string,
-  pattern: string,
-  caseSensitive: boolean,
-  contextLines: number,
-  maxMatches: number,
-  includePatternText: string | undefined,
-  excludePatternText: string | undefined,
-  includeMatcher: GlobMatcher | null,
-  excludeMatcher: GlobMatcher | null,
-): Promise<string> {
-  const ripgrepOutput = await searchTextFilesWithRipgrep(
-    workspaceRoot,
-    startPath,
-    pattern,
-    caseSensitive,
-    contextLines,
-    maxMatches,
-    includePatternText,
-    excludePatternText,
-  );
-  if (ripgrepOutput !== null) return ripgrepOutput;
-
-  const needle = caseSensitive ? pattern : pattern.toLowerCase();
-  const lines: string[] = [];
-  let outputBytes = 0;
-
-  async function walk(path: string, relBase: string): Promise<void> {
-    if (lines.length >= maxMatches) return;
-    if (outputBytes > config.maxOutputBytes) return;
-
-    let info;
-    try {
-      info = await stat(path);
-      assertNotDenied(path, workspaceRoot, config.denyGlobs);
-    } catch {
-      return;
-    }
-
-    if (info.isDirectory()) {
-      const entries = await readdir(path, { withFileTypes: true });
-      for (const entry of entries) {
-        if (entry.isSymbolicLink() || ["node_modules", "dist", ".git"].includes(entry.name)) continue;
-        const childRel = relBase ? `${relBase}/${entry.name}` : entry.name;
-        if (excludeMatcher && (excludeMatcher(childRel))) continue;
-        await walk(join(path, entry.name), childRel);
-      }
-      return;
-    }
-
-    if (!info.isFile()) return;
-    const relPath = relBase || relativeDisplayPath(workspaceRoot, path);
-    if (excludeMatcher && excludeMatcher(relPath)) return;
-    if (includeMatcher && !includeMatcher(relPath)) return;
-
-    let text: string;
-    try {
-      text = (await readFileCapped(path, Math.min(config.maxReadBytes, 128_000))).text;
-    } catch {
-      return;
-    }
-
-    const fileLines = text.split(/\r?\n/);
-
-    for (let index = 0; index < fileLines.length && lines.length < maxMatches; index++) {
-      const line = fileLines[index];
-      const matchTarget = caseSensitive ? line : line.toLowerCase();
-      const matchResult = matchTarget.includes(needle);
-
-      if (matchResult) {
-        const displayLine = line.length > 300 ? `${line.slice(0, 300)}...` : line;
-
-        if (contextLines > 0) {
-          const contextStart = Math.max(0, index - contextLines);
-          const contextEnd = Math.min(fileLines.length - 1, index + contextLines);
-          if (contextStart < index) {
-            pushSearchLine(`... ${relPath}:${contextStart + 1}-${index} (context)`);
-          }
-          pushSearchLine(`${relPath}:${index + 1}: ${displayLine}`);
-          if (contextEnd > index) {
-            pushSearchLine(`... ${relPath}:${index + 2}-${contextEnd + 1} (context)`);
-          }
-        } else {
-          pushSearchLine(`${relPath}:${index + 1}: ${displayLine}`);
-        }
-      }
-    }
-  }
-
-  const baseRel = startPath === "." ? "" : relative(workspaceRoot, startPath).replace(/\\/g, "/");
-  await walk(startPath, startPath === workspaceRoot ? "" : baseRel);
-
-  const output = lines.slice(0, maxMatches).join("\n");
-  if (Buffer.byteLength(output, "utf8") <= config.maxOutputBytes) return output;
-  return capText(output, config.maxOutputBytes);
-
-  function pushSearchLine(line: string): void {
-    if (lines.length >= maxMatches || outputBytes > config.maxOutputBytes) return;
-    lines.push(line);
-    outputBytes += Buffer.byteLength(line, "utf8") + 1;
-  }
-}
-
-async function searchTextFilesWithRipgrep(
-  workspaceRoot: string,
-  startPath: string,
-  pattern: string,
-  caseSensitive: boolean,
-  contextLines: number,
-  maxMatches: number,
-  includePatternText: string | undefined,
-  excludePatternText: string | undefined,
-): Promise<string | null> {
-  const pathArg = startPath === workspaceRoot ? "." : relative(workspaceRoot, startPath).replace(/\\/g, "/");
-  const args = [
-    "--color",
-    "never",
-    "--line-number",
-    "--no-heading",
-    "--null",
-    "--with-filename",
-    "--fixed-strings",
-  ];
-  if (!caseSensitive) args.push("--ignore-case");
-  if (contextLines > 0) args.push("--context", String(contextLines));
-
-  for (const glob of ["node_modules/**", "dist/**", ".git/**"]) {
-    args.push("--glob", `!${glob}`);
-  }
-  for (const glob of config.denyGlobs) {
-    args.push("--glob", `!${glob.replace(/\\/g, "/")}`);
-  }
-  for (const glob of splitGlobPatterns(includePatternText ?? "")) {
-    args.push("--glob", glob);
-  }
-  for (const glob of splitGlobPatterns(excludePatternText ?? "")) {
-    args.push("--glob", `!${glob}`);
-  }
-  args.push("--", pattern, pathArg);
-
-  const result = await runProcess({
-    command: "rg",
-    args,
-    cwd: workspaceRoot,
-    timeoutMs: 30_000,
-    maxOutputBytes: config.maxOutputBytes,
-    terminateOnOutputLimit: true,
-  });
-
-  if (result.exitCode === null && /enoent|not found|could not be found/i.test(result.stderr)) return null;
-  if (!result.outputLimitReached && result.exitCode === 1) return "";
-  if (!result.outputLimitReached && result.exitCode !== 0) return null;
-
-  // An early stop may cut the final line in half; only return complete matches.
-  let output = result.stdout;
-  if (result.outputLimitReached) {
-    output = output.replace(/\n\[output truncated\]\n$/, "");
-    output = output.slice(0, output.lastIndexOf("\n") + 1);
-  }
-  const lines = output.split(/\r?\n/).filter(line => line.length > 0);
-  const filteredLines = filterRipgrepOutputLines(workspaceRoot, lines, maxMatches);
-  const formatted = filteredLines.join("\n") + (result.outputLimitReached ? "\n[search output truncated]" : "");
-  return capText(formatted, config.maxOutputBytes);
-}
-
-function filterRipgrepOutputLines(workspaceRoot: string, lines: string[], maxLines: number): string[] {
-  const output: string[] = [];
-  for (const line of lines) {
-    const relPath = parseRipgrepOutputPath(line);
-    if (relPath) {
-      try {
-        assertNotDenied(join(workspaceRoot, relPath), workspaceRoot, config.denyGlobs);
-      } catch {
-        continue;
-      }
-    }
-    if (line === "--" && (output.length === 0 || output[output.length - 1] === "--")) continue;
-    output.push(normalizeRipgrepOutputLine(line));
-    if (output.length >= maxLines) break;
-  }
-  while (output[output.length - 1] === "--") output.pop();
-  return output;
-}
-
-// --- files(action="find") helpers ---
-
-async function findFilesByGlob(
-  workspaceRoot: string,
-  startPath: string,
-  matcher: GlobMatcher,
-  maxResults: number,
-): Promise<string[]> {
-  const results: string[] = [];
-
-  async function walk(path: string): Promise<void> {
-    if (results.length >= maxResults) return;
-
-    let info;
-    try {
-      info = await stat(path);
-      assertNotDenied(path, workspaceRoot, config.denyGlobs);
-    } catch {
-      return;
-    }
-
-    if (info.isDirectory()) {
-      const entries = await readdir(path, { withFileTypes: true });
-      for (const entry of entries) {
-        if (entry.isSymbolicLink() || ["node_modules", "dist", ".git"].includes(entry.name)) continue;
-        await walk(join(path, entry.name));
-      }
-      return;
-    }
-
-    if (!info.isFile()) return;
-
-    const relPath = relative(workspaceRoot, path).replace(/\\/g, "/");
-    if (matcher(relPath)) {
-      results.push(relPath);
-    }
-  }
-
-  await walk(startPath);
-  return results.slice(0, maxResults);
-}
-
-// --- files(action="list") recursive helpers ---
-
-async function buildProjectTree(
-  root: string,
-  startPath: string,
-  currentDepth: number,
-  maxDepth: number,
-): Promise<string> {
-  const lines: string[] = [];
-  const maxEntries = 3000;
-  const maxBytes = Math.min(config.maxOutputBytes, 60_000);
-  let bytes = 0;
-  let visited = 0;
-  let clipped = false;
-  function push(line: string): void {
-    if (clipped) return;
-    const next = Buffer.byteLength(line, "utf8") + 1;
-    if (lines.length >= maxEntries || bytes + next > maxBytes) { clipped = true; return; }
-    lines.push(line); bytes += next;
-  }
-  async function walk(path: string, depth: number, prefix: string): Promise<void> {
-    if (clipped || depth > maxDepth) return;
-    if (++visited > 15_000) { clipped = true; return; }
-    let info;
-    try {
-      info = await stat(path);
-      assertNotDenied(path, root, config.denyGlobs);
-    } catch { return; }
-    if (!info.isDirectory()) { push(`📄 ${relative(root, path)}`); return; }
-    const entries = await readdir(path, { withFileTypes: true });
-    const visible = entries.filter(entry => {
-      if (entry.isSymbolicLink() || ["node_modules", "dist", ".git"].includes(entry.name)) return false;
-      try { assertNotDenied(join(path, entry.name), root, config.denyGlobs); return true; } catch { return false; }
-    }).sort((a, b) => a.name.localeCompare(b.name));
-    if (depth > 0) push(`${prefix}📁 ${path.split(sep).pop()}/`);
-    const childPrefix = depth === 0 ? "" : `${prefix}  `;
-    if (depth < maxDepth) {
-      for (const entry of visible) {
-        if (clipped) break;
-        if (entry.isDirectory()) await walk(join(path, entry.name), depth + 1, `${childPrefix}  `);
-      }
-    }
-    for (const entry of visible) {
-      if (clipped) break;
-      if (entry.isFile()) push(`${childPrefix}📄 ${entry.name}`);
-    }
-  }
-  await walk(startPath, currentDepth, "");
-  if (clipped) lines.push("[tree truncated: narrow the path or depth]");
-  return lines.join("\n");
-}
-
 // --- Process result formatter ---
 
 function formatProcessResult(result: { stdout: string; stderr: string; exitCode: number | null; timedOut: boolean }): string {
@@ -1152,15 +853,17 @@ function formatProcessResult(result: { stdout: string; stderr: string; exitCode:
 // ============================================================
 
 const app = express();
+app.disable("x-powered-by");
 app.use((req, res, next) => {
   const start = Date.now();
   res.once("finish", () => {
     if (req.path === "/mcp" || req.path === "/healthz") {
-      console.log(`${req.method} ${req.originalUrl} -> ${res.statusCode} ${Date.now() - start}ms`);
+      console.log(`${req.method} ${req.path} -> ${res.statusCode} ${Date.now() - start}ms`);
     }
   });
   next();
 });
+app.use("/mcp", createHttpGuard(config.httpGuard));
 app.use(express.json({ limit: "4mb" }));
 app.get("/healthz", (_req, res) => res.json({ ok: true, name: "chatgpt-codex-tools-mcp" }));
 
@@ -1190,5 +893,6 @@ app.listen(config.port, config.host, () => {
   console.log(`chatgpt-codex-tools-mcp listening on http://${config.host}:${config.port}/mcp`);
   console.log(`allowed roots: ${config.allowedRoots.join(", ")}`);
   console.log(`access mode: ${config.accessMode}`);
+  console.log(`HTTP Host/Origin guard: ${config.httpGuard ? "enabled" : "disabled"}`);
   console.log("auth: no authentication (use only behind a private/local tunnel)");
 });

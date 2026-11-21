@@ -11,6 +11,7 @@ ChatGPT 负责推理；本服务负责限定工作区的文件读取、搜索、
 >
 > MCP 端点没有应用层认证。请保持绑定 `127.0.0.1`，并在前面使用可信入口。
 > 使用 Tailscale Funnel 时，只公开 `127.0.0.1:3334` 的 OAuth Gateway，绝不要把 MCP `3333` 端口直接暴露出去。
+> 可额外启用 `mcp.httpGuardEnabled` 限制 Host 和 Origin，防御 DNS 重绑定；此防护不替代身份认证，详见配置说明。
 
 ## 主要功能
 
@@ -296,6 +297,19 @@ CTM_ACCESS_MODE=full
 不要把隧道运行密钥写入 `config.json`。OpenAI Tunnel 的
 `CONTROL_PLANE_API_KEY` 应放在当前环境，或 Git 已忽略的本地
 `tunnel\openai\control-plane-api-key.txt`。
+
+## 可选 HTTP 入口防护
+
+为兼容已有隧道，入口防护默认关闭。设置 `mcp.httpGuardEnabled: true`
+或 `CTM_HTTP_GUARD=1` 可启用。通过 `mcp.httpAllowedHosts`
+（环境变量 `CTM_HTTP_ALLOWED_HOSTS`，逗号分隔）配置精确的 Host（含端口）；
+留空时允许当前服务端口对应的 `127.0.0.1`、`localhost` 和 `[::1]`。
+通过 `mcp.httpAllowedOrigins`（环境变量 `CTM_HTTP_ALLOWED_ORIGINS`）
+配置精确的 HTTP(S) Origin；留空时拒绝带 Origin 的请求，不带 Origin 的原生
+MCP 客户端仍可连接。不信任转发 Host 请求头。内置 OAuth Gateway 会把 Host
+改写到本地上游地址；其它隧道启用前应验证实际转发的 Host 和 Origin。
+
+此防护仅用于补充请求来源校验，不是身份认证，不应因此将无认证的 MCP 直接暴露到公网。
 
 ## 可选 Web 工具
 

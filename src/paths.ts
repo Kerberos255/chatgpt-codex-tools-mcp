@@ -62,8 +62,9 @@ export async function assertRealWorkspacePath(path: string, root: string, allowe
   assertNotDenied(candidate, root, denyGlobs);
   const realRoot = await realpath(root);
   let existing = candidate;
+  let realExisting: string;
   for (;;) {
-    try { await realpath(existing); break; }
+    try { realExisting = await realpath(existing); break; }
     catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       const parent = dirname(existing);
@@ -71,9 +72,12 @@ export async function assertRealWorkspacePath(path: string, root: string, allowe
       existing = parent;
     }
   }
-  const canonical = resolve(await realpath(existing), relative(existing, candidate));
+  const canonical = resolve(realExisting, relative(existing, candidate));
   if (!isInsideRoot(canonical, realRoot)) throw new AccessDeniedError("Symlink or junction escapes the workspace.");
   const roots = await Promise.all(allowedRoots.map(async value => {
+    // Reuse only data resolved during this validation, never across requests.
+    if (resolve(value) === resolve(root)) return realRoot;
+    if (resolve(value) === resolve(existing)) return realExisting;
     try { return await realpath(value); } catch { return resolve(value); }
   }));
   assertAllowedPath(canonical, roots);

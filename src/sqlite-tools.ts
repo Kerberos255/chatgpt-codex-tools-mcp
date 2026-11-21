@@ -179,9 +179,8 @@ export function sqlitePreviewChange(config: Config, input: {
       case "update": {
         const limit = normalizeChangeLimit(change.limit);
         beforeRows = fetchRowsForWhere(db, change.table, change.where, limit);
-        const setDisplay = Object.entries(change.set).map(([k, v]) => `  SET ${k} = ${JSON.stringify(v)}`).join("\n");
         const afterRows = beforeRows.map((row) => applySetToRow(row, change.set));
-        diff = formatBeforeAfter(beforeRows, afterRows, change.table, "UPDATE", setDisplay);
+        diff = formatBeforeAfter(beforeRows, afterRows, change.table, "UPDATE");
         break;
       }
       case "delete": {
@@ -208,7 +207,7 @@ export function sqlitePreviewChange(config: Config, input: {
 
 export function sqliteConfirmChange(config: Config, actionId: string) {
   const pending = sqliteChanges.take(actionId);
-  const db = openDb(pending.dbPath, false);
+  const db = openDb(resolveAllowedDb(config, pending.dbPath), false);
   try {
     db.exec("BEGIN IMMEDIATE");
     try {
@@ -528,7 +527,6 @@ function formatBeforeAfter(
   after: Record<string, unknown>[],
   table: string,
   operation: string,
-  details: string,
 ): string {
   const lines: string[] = [];
   for (let i = 0; i < before.length; i++) {
