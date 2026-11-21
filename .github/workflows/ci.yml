@@ -26,6 +26,11 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: npm
 
+      - name: Ensure ripgrep is available
+        run: |
+          command -v rg >/dev/null || (sudo apt-get update && sudo apt-get install -y ripgrep)
+          rg --version
+
       - run: npm ci
       - run: npm run check
 
@@ -55,9 +60,18 @@ jobs:
           node-version: 24
           cache: npm
 
+      - name: Ensure ripgrep is available
+        shell: pwsh
+        run: |
+          if (-not (Get-Command rg -ErrorAction SilentlyContinue)) {
+            choco install ripgrep -y --no-progress
+            if ($LASTEXITCODE -ne 0) { throw "ripgrep installation failed" }
+          }
+          rg --version
+          if ($LASTEXITCODE -ne 0) { throw "ripgrep unavailable" }
+
       - run: npm ci
-      - run: npm run build
-      - run: npm test
+      - run: npm run check
 
       - name: Check PowerShell syntax
         shell: pwsh

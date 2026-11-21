@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { BoundedOutput, resolveProcessCommand, scrubEnv, type ProcessResult } from "./process-runner.js";
+import { killTree } from "./process-tree.js";
 
 export interface ManagedProcessSnapshot extends ProcessResult {
   id: string;
@@ -46,7 +47,7 @@ export class ManagedProcessStore {
     const invocation = resolveProcessCommand(input.command, input.args);
     const id = `proc_${randomUUID()}`;
     const child = spawn(invocation.command, invocation.args, {
-      cwd: input.cwd, shell: false, windowsHide: true, env: scrubEnv(process.env),
+      cwd: input.cwd, shell: false, windowsHide: true, detached: process.platform !== "win32", env: scrubEnv(process.env),
     });
     const entry: ManagedProcessEntry = {
       id, command: input.command, args: input.args, cwd: input.cwd, child,
@@ -54,7 +55,7 @@ export class ManagedProcessStore {
       exitCode: null, timedOut: false, running: true, startedAt: Date.now(),
       timer: setTimeout(() => {
         entry.timedOut = true;
-        child.kill("SIGTERM");
+        killTree(child);
       }, input.timeoutMs),
     };
     child.stdout.on("data", (chunk: Buffer) => entry.stdout.append(chunk));
@@ -72,7 +73,7 @@ export class ManagedProcessStore {
 
   stop(id: string): ManagedProcessSnapshot {
     const entry = this.get(id);
-    if (entry.running) entry.child.kill("SIGTERM");
+    if (entry.running) killTree(entry.child);
     // A successful stop request is not proof of process exit. The 'close' event sets finishedAt.
     return snapshot(entry);
   }

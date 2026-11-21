@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
+import type { HttpGuardPolicy } from "./http-guard.js";
 
 export type AccessMode = "review" | "full";
 export type SearchProvider = "none" | "searxng";
@@ -14,6 +15,7 @@ export interface Config {
   maxReadBytes: number;
   maxOutputBytes: number;
   maxSessions: number;
+  httpGuard?: HttpGuardPolicy;
   webToolsEnabled: boolean;
   searchProvider: SearchProvider;
   searxngUrl: string;
@@ -49,10 +51,17 @@ export function loadConfig(env = process.env): Config {
   const mcpConfig = fileConfig.mcp ?? {};
   const webConfig = fileConfig.web ?? {};
   const sqliteConfig = fileConfig.sqlite ?? {};
+  const port = parseInteger(firstConfigured(env.PORT, mcpConfig.port), 3333, "PORT");
+  const httpGuardEnabled = parseBoolean(firstConfigured(env.CTM_HTTP_GUARD, mcpConfig.httpGuardEnabled));
 
   return {
     host: parseString(firstConfigured(env.HOST, mcpConfig.host), "127.0.0.1"),
-    port: parseInteger(firstConfigured(env.PORT, mcpConfig.port), 3333, "PORT"),
+    port,
+    httpGuard: httpGuardEnabled ? {
+      allowedHosts: parseList(firstConfigured(env.CTM_HTTP_ALLOWED_HOSTS, mcpConfig.httpAllowedHosts),
+        [`127.0.0.1:${port}`, `localhost:${port}`, `[::1]:${port}`]),
+      allowedOrigins: parseList(firstConfigured(env.CTM_HTTP_ALLOWED_ORIGINS, mcpConfig.httpAllowedOrigins), []),
+    } : undefined,
     allowedRoots: parsePathList(firstConfigured(env.CTM_ALLOWED_ROOTS, mcpConfig.allowedRoots, process.cwd())),
     denyGlobs: parseList(firstConfigured(env.CTM_DENY_GLOBS, mcpConfig.denyGlobs), defaultDenyGlobs),
     accessMode: parseAccessMode(firstConfigured(env.CTM_ACCESS_MODE, mcpConfig.accessMode)),

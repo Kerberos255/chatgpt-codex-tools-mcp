@@ -69,20 +69,36 @@ export interface PendingSqliteChange {
 
 // --- Store ---
 
-class SqliteChangeStore {
+export class SqliteChangeStore {
   private readonly changes = new Map<string, PendingSqliteChange>();
 
+  constructor(
+    private readonly max = 128,
+    private readonly ttlMs = 10 * 60_000,
+    private readonly now: () => number = Date.now,
+  ) {}
+
   create(input: Omit<PendingSqliteChange, "id" | "createdAt">): PendingSqliteChange {
-    const entry = { ...input, id: `sqlite_${randomUUID()}`, createdAt: Date.now() };
+    this.prune();
+    if (this.changes.size >= this.max) throw new Error("Too many pending SQLite changes.");
+    const entry = { ...input, id: `sqlite_${randomUUID()}`, createdAt: this.now() };
     this.changes.set(entry.id, entry);
     return entry;
   }
 
   take(actionId: string): PendingSqliteChange {
+    this.prune();
     const entry = this.changes.get(actionId);
-    if (!entry) throw new Error(`Unknown sqlite actionId: ${actionId}`);
+    if (!entry) throw new Error(`Unknown or expired sqlite actionId: ${actionId}`);
     this.changes.delete(actionId);
     return entry;
+  }
+
+  private prune(): void {
+    const cutoff = this.now() - this.ttlMs;
+    for (const [id, entry] of this.changes) {
+      if (entry.createdAt <= cutoff) this.changes.delete(id);
+    }
   }
 }
 
@@ -163,9 +179,8 @@ export function sqlitePreviewChange(config: Config, input: {
       case "update": {
         const limit = normalizeChangeLimit(change.limit);
         beforeRows = fetchRowsForWhere(db, change.table, change.where, limit);
-        const setDisplay = Object.entries(change.set).map(([k, v]) => `  SET ${k} = ${JSON.stringify(v)}`).join("\n");
         const afterRows = beforeRows.map((row) => applySetToRow(row, change.set));
-        diff = formatBeforeAfter(beforeRows, afterRows, change.table, "UPDATE", setDisplay);
+        diff = formatBeforeAfter(beforeRows, afterRows, change.table, "UPDATE");
         break;
       }
       case "delete": {
@@ -192,7 +207,7 @@ export function sqlitePreviewChange(config: Config, input: {
 
 export function sqliteConfirmChange(config: Config, actionId: string) {
   const pending = sqliteChanges.take(actionId);
-  const db = openDb(pending.dbPath, false);
+  const db = openDb(resolveAllowedDb(config, pending.dbPath), false);
   try {
     db.exec("BEGIN IMMEDIATE");
     try {
@@ -512,7 +527,6 @@ function formatBeforeAfter(
   after: Record<string, unknown>[],
   table: string,
   operation: string,
-  details: string,
 ): string {
   const lines: string[] = [];
   for (let i = 0; i < before.length; i++) {

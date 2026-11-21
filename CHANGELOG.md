@@ -1,6 +1,45 @@
 # Changelog
 
-## Unreleased (2026-11-05)
+## v0.6.4 (2026-11-22)
+
+### Pre-deployment acceptance
+
+- Bind edit confirmation to the same byte snapshot used to produce previews; reject stale plans, normalize path spellings, reject ambiguous aliases and non-UTF-8 text edits, and preserve original binary bytes on rename/delete rollback.
+- Bound edit snapshots, batch snapshots, and large line-count diffs; recheck canonical paths before returning ripgrep matches, including explicitly selected internal aliases.
+- Declare the process output-limit indicator in typed MCP responses and add strict SDK end-to-end tests for file, Git, edit and exec operations.
+- Add targeted regression tests and an actual ripgrep integration test when ripgrep is installed.
+
+### File tooling and HTTP hardening
+
+- Extract workspace file helpers from the MCP registration module; stream directory entries for find and fallback search, preserving case-insensitive glob, hidden-file and ignore-file behavior for find.
+- Share directory filters, reject unsafe canonical paths and avoid duplicate realpath calls within a single validation without caching across requests. Keep UTF-8 reads intact at byte boundaries.
+- Add opt-in exact Host/Origin checks before MCP JSON parsing, rejecting untrusted forwarded Host headers while preserving existing tunnel defaults. Keep external authentication required.
+- Recheck the database allowlist before SQLite confirmation; enable unused-code checks in TypeScript and remove redundant declarations.
+
+### Follow-up reliability and performance
+
+- Revalidate workspace and junction boundaries immediately before edit staging, each commit and rollback; preserve original modes and guard against overwriting concurrent external edits.
+- Add deterministic failure-injection tests for partial edits, rollbacks, and Windows junction swaps.
+- Stop read-only ripgrep searches early when their output cap is exceeded while preserving complete partial results; regular exec remains unchanged.
+- Cache trusted screenshot C# compilation per MCP process in a temporary assembly, verify its SHA-256 before loading, and fall back to inline compilation when unavailable.
+- Support opt-in `web(action="fetch", format="text")` for readable HTML extraction; `raw` remains the default.
+
+### Safety and correctness
+
+- Plan ordered file edits in memory before writing, produce bounded content diffs, stage writes before replacement and attempt rollback on partial failures.
+- Treat replacement strings literally, reject ambiguous or empty matches on existing files, preserve CRLF in line replacements and surface unreadable files.
+- Resolve ripgrep paths with NUL separators, preserving numeric-dashed filenames during deny-glob filtering.
+- Extend web timeouts through response bodies; validate all resolved addresses and pin outgoing connections to vetted IPs to defend against DNS rebinding, including IPv4-mapped and translated IPv6.
+- End whole subprocess trees on timeout or stop, including Windows descendants.
+- Bound pending SQLite changes by count and expiration.
+
+### Performance and maintenance
+
+- Use one Git diff invocation with patch and stat, share UTF-8-safe byte capping, and report the actual version in web requests.
+- Update dependency locks to resolve known npm advisory findings without major-version upgrades; retain the nine-tool MCP interface and stateless HTTP sessions.
+- Expand Windows regression tests for edit batching, filesystem conflicts, child process cleanup, web deadlines, address checks and Unicode output.
+
+### Previous unreleased maintenance (2026-11-05)
 
 - Permit PowerShell / PowerShell 7 `-Command` and workspace `.ps1` in `full` mode with targeted destructive-operation checks; keep other shells blocked.
 
@@ -9,9 +48,7 @@
 - Bound process-output memory, large-file reads and recursive directory output; reclaim old pending edits, workspaces and managed processes.
 - Add regression tests for command false positives, multibyte output, path escapes and edit conflicts.
 
-## v0.6.4 (2026-10-31)
-
-### Fixes
+### Windows screenshot fixes
 
 - Capture physical-pixel bounds with per-monitor DPI awareness, fixing clipped screenshots under Windows display scaling.
 - Add window-relative crops through PrintWindow without requiring a screen DC or falling back to the desktop; require unambiguous same-session window selection.

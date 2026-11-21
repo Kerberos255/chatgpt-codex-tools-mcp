@@ -1,5 +1,7 @@
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
+import { truncateUtf8 } from "./text.js";
+import { killTree } from "./process-tree.js";
 import { delimiter, dirname, join } from "node:path";
 import { assertPowerShellAllowed, type PowerShellPolicyContext } from "./powershell-policy.js";
 import type { AccessMode } from "./config.js";
@@ -9,6 +11,8 @@ export interface ProcessResult {
   stderr: string;
   exitCode: number | null;
   timedOut: boolean;
+  /** Output reached its configured byte cap; a read-only process may have been stopped early. */
+  outputLimitReached?: boolean;
 }
 
 const shells = new Set(["bash", "bash.exe", "sh", "sh.exe", "cmd", "cmd.exe"]);
@@ -102,14 +106,13 @@ export class BoundedOutput {
       this.count += part.byteLength;
     }
   }
+  isTruncated(): boolean { return this.truncated; }
   text(): string {
     const marker = "\n[output truncated]\n";
-    const allowance = Math.max(0, this.maxBytes - (this.truncated ? Buffer.byteLength(marker) : 0));
-    let value = Buffer.concat(this.chunks, this.count).subarray(0, allowance).toString("utf8");
-    // An incomplete trailing UTF-8 sequence may decode to a 3-byte replacement character.
-    while (Buffer.byteLength(value, "utf8") > allowance) value = value.slice(0, -1);
-    if (!this.truncated || this.maxBytes < Buffer.byteLength(marker)) return value;
-    return value + marker;
+    const all = Buffer.concat(this.chunks, this.count);
+    const markerBytes = Buffer.byteLength(marker);
+    if (!this.truncated || this.maxBytes < markerBytes) return truncateUtf8(all, this.maxBytes);
+    return truncateUtf8(all, this.maxBytes - markerBytes) + marker;
   }
 }
 
@@ -128,28 +131,38 @@ export async function runProcess(input: {
   cwd: string;
   timeoutMs: number;
   maxOutputBytes: number;
+  /** Only enable for read-only commands whose partial output remains useful. */
+  terminateOnOutputLimit?: boolean;
 }): Promise<ProcessResult> {
   const invocation = resolveProcessCommand(input.command, input.args);
   return new Promise(resolve => {
     const stdout = new BoundedOutput(input.maxOutputBytes);
     const stderr = new BoundedOutput(input.maxOutputBytes);
     const child = spawn(invocation.command, invocation.args, {
-      cwd: input.cwd, shell: false, windowsHide: true, env: scrubEnv(process.env),
+      cwd: input.cwd, shell: false, windowsHide: true, detached: process.platform !== "win32", env: scrubEnv(process.env),
     });
     let timedOut = false;
+    let outputLimitReached = false;
     let settled = false;
     const timer = setTimeout(() => {
       timedOut = true;
-      child.kill("SIGTERM");
+      killTree(child);
     }, input.timeoutMs);
     function finish(exitCode: number | null): void {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      resolve({ stdout: stdout.text(), stderr: stderr.text(), exitCode, timedOut });
+      resolve({ stdout: stdout.text(), stderr: stderr.text(), exitCode, timedOut, outputLimitReached });
     }
-    child.stdout?.on("data", (chunk: Buffer) => stdout.append(chunk));
-    child.stderr?.on("data", (chunk: Buffer) => stderr.append(chunk));
+    const stopWhenFull = (): void => {
+      if (!input.terminateOnOutputLimit || outputLimitReached || settled) return;
+      if (stdout.isTruncated() || stderr.isTruncated()) {
+        outputLimitReached = true;
+        killTree(child);
+      }
+    };
+    child.stdout?.on("data", (chunk: Buffer) => { stdout.append(chunk); stopWhenFull(); });
+    child.stderr?.on("data", (chunk: Buffer) => { stderr.append(chunk); stopWhenFull(); });
     child.on("error", error => { stderr.append(error.message); finish(null); });
     child.on("close", exitCode => finish(exitCode));
   });

@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { POWERSHELL_SCRIPT } from "./screenshot-native.js";
+import { getScreenshotAssembly } from "./screenshot-assembly-cache.js";
 
 const execFileAsync = promisify(execFile);
 const MAX_SCREENSHOT_BYTES = 16 * 1024 * 1024;
@@ -109,11 +110,12 @@ export function validateScreenshotPNG(image: Buffer, metadata: ScreenshotMetadat
 export async function captureScreenshot(options: ScreenshotOptions): Promise<ScreenshotResult> {
   const crop=validateScreenshot(options);
   if (process.platform!=="win32") throw new ScreenshotError("UNSUPPORTED_PLATFORM","screenshot is currently supported on Windows only.");
+  const trustedAssembly = await getScreenshotAssembly();
   const temporary=await mkdtemp(join(tmpdir(),"ctm-screenshot-"));
   const tempPath=join(temporary,`${randomUUID()}.png`),scriptPath=join(temporary,"capture.ps1");
   const env={...process.env,CTM_SHOT_MODE:options.mode,CTM_SHOT_MONITOR:String(options.monitor??0),
     CTM_SHOT_WINDOW_TITLE:options.windowTitle??"",CTM_SHOT_WINDOW_HANDLE:String(options.windowHandle??0),
-    CTM_SHOT_CROP:crop?"1":"0",CTM_SHOT_X:String(options.x??0),CTM_SHOT_Y:String(options.y??0),
+    CTM_SHOT_ASSEMBLY:trustedAssembly??"",CTM_SHOT_CROP:crop?"1":"0",CTM_SHOT_X:String(options.x??0),CTM_SHOT_Y:String(options.y??0),
     CTM_SHOT_WIDTH:String(options.width??0),CTM_SHOT_HEIGHT:String(options.height??0),CTM_SHOT_OUTPUT:tempPath};
   try {
     let stdout: string;

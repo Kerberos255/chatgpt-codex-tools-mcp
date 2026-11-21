@@ -31,6 +31,7 @@ export function relativeDisplayPath(root: string, path: string): string {
 }
 
 const denyMatcherCache = new WeakMap<string[], GlobMatcher>();
+const denyDirectoryMatcherCache = new WeakMap<string[], GlobMatcher>();
 export function assertNotDenied(path: string, workspaceRoot: string, denyGlobs: string[]): void {
   let matcher = denyMatcherCache.get(denyGlobs);
   if (!matcher) {
@@ -39,10 +40,16 @@ export function assertNotDenied(path: string, workspaceRoot: string, denyGlobs: 
   }
   const rel = relativeDisplayPath(workspaceRoot, path);
   const parts = rel.split("/");
-  // Also reject denied parent directories (not only files beneath them).
+  // Globs such as **/secrets/** must also deny the directory itself.
+  let directoryMatcher = denyDirectoryMatcherCache.get(denyGlobs);
+  if (!directoryMatcher) {
+    directoryMatcher = createGlobMatcher(denyGlobs.filter(pattern => pattern.endsWith("/**"))
+      .map(pattern => pattern.slice(0, -3)).join(","), { matchBasename: true });
+    denyDirectoryMatcherCache.set(denyGlobs, directoryMatcher);
+  }
   for (let i = 1; i <= parts.length; i++) {
     const part = parts.slice(0, i).join("/");
-    if (matcher(part) || matcher(part + "/")) {
+    if (matcher(part) || directoryMatcher(part)) {
       throw new AccessDeniedError(`Path is blocked by deny globs: ${rel}`);
     }
   }
@@ -55,8 +62,9 @@ export async function assertRealWorkspacePath(path: string, root: string, allowe
   assertNotDenied(candidate, root, denyGlobs);
   const realRoot = await realpath(root);
   let existing = candidate;
+  let realExisting: string;
   for (;;) {
-    try { await realpath(existing); break; }
+    try { realExisting = await realpath(existing); break; }
     catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       const parent = dirname(existing);
@@ -64,9 +72,12 @@ export async function assertRealWorkspacePath(path: string, root: string, allowe
       existing = parent;
     }
   }
-  const canonical = resolve(await realpath(existing), relative(existing, candidate));
+  const canonical = resolve(realExisting, relative(existing, candidate));
   if (!isInsideRoot(canonical, realRoot)) throw new AccessDeniedError("Symlink or junction escapes the workspace.");
   const roots = await Promise.all(allowedRoots.map(async value => {
+    // Reuse only data resolved during this validation, never across requests.
+    if (resolve(value) === resolve(root)) return realRoot;
+    if (resolve(value) === resolve(existing)) return realExisting;
     try { return await realpath(value); } catch { return resolve(value); }
   }));
   assertAllowedPath(canonical, roots);

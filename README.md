@@ -14,6 +14,9 @@ execution without a shell, and optional web and SQLite tools.
 > The MCP endpoint has no application-layer authentication. Keep it bound to
 > `127.0.0.1` and place a trusted ingress in front of it. With Tailscale Funnel,
 > expose only the OAuth gateway on `127.0.0.1:3334`, never MCP port `3333` directly.
+> For additional DNS-rebinding protection, enable `mcp.httpGuardEnabled` and
+> configure the exact backend Host and any trusted browser Origins. This is
+> not authentication; see the configuration section.
 
 ## Highlights
 
@@ -307,6 +310,22 @@ Do not put tunnel runtime keys in `config.json`. For OpenAI Tunnel, keep
 `CONTROL_PLANE_API_KEY` in the current environment or the Git-ignored local
 `tunnel\openai\control-plane-api-key.txt` file.
 
+## Optional HTTP entry guard
+
+The guard is opt-in for existing tunnel compatibility. Set
+`mcp.httpGuardEnabled: true` or `CTM_HTTP_GUARD=1` to enforce it.
+`mcp.httpAllowedHosts` (or `CTM_HTTP_ALLOWED_HOSTS`, comma-separated) accepts
+exact Host authorities including the port. An empty list defaults to
+`127.0.0.1:<port>`, `localhost:<port>`, and `[::1]:<port>`.
+`mcp.httpAllowedOrigins` (or `CTM_HTTP_ALLOWED_ORIGINS`) accepts exact HTTP(S)
+origins; the empty list allows no browser Origin. Native requests without an
+Origin remain permitted. No forwarded Host header is trusted. The bundled
+OAuth gateway rewrites Host to its configured local target; verify any other
+tunnel's forwarded Host and Origin before enabling the guard.
+
+This is an additional request-source check, not authentication, and does not
+make an unauthenticated MCP endpoint safe to expose publicly.
+
 ## Optional web tools
 
 Enable in `config.json`:
@@ -324,6 +343,9 @@ Enable in `config.json`:
 - `web` with `action="search"` queries only the configured SearXNG instance.
 - `web` with `action="fetch"` accepts public HTTP(S) URLs and blocks localhost,
   private network targets, embedded credentials, and unsafe redirects.
+- `web(action="fetch", format="text")` extracts readable text from HTML and omits
+  navigation, scripts and layout markup. The default `format="raw"` preserves
+  the original response body for existing clients.
 - No cookies, browser login state, authorization headers, or client certificates
   are forwarded.
 

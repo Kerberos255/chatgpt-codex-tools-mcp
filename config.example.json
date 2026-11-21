@@ -8,7 +8,10 @@
     "accessMode": "review",
     "maxReadBytes": 200000,
     "maxOutputBytes": 200000,
-    "maxSessions": 128
+    "maxSessions": 128,
+    "httpGuardEnabled": false,
+    "httpAllowedHosts": [],
+    "httpAllowedOrigins": []
   },
   "runtime": {
     "codexRuntimeRoot": "",
