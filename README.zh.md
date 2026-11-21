@@ -314,6 +314,7 @@ CTM_ACCESS_MODE=full
 - `web` 的 `action="search"` 只查询配置的 SearXNG 实例。
 - `web` 的 `action="fetch"` 只接受公共 HTTP(S) 地址，并阻止 localhost、私网目标、嵌入凭据和
   不安全重定向。
+- `web(action="fetch", format="text")` 将 HTML 转换成可读正文，去掉脚本、导航和布局标签；默认 `format="raw"` 保持原始内容兼容。
 - 不转发 cookie、浏览器登录态、Authorization 头或客户端证书。
 
 ## 可选 SQLite 工具

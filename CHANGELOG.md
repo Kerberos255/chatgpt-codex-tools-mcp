@@ -2,6 +2,14 @@
 
 ## Unreleased (2026-11-22)
 
+### Follow-up reliability and performance
+
+- Revalidate workspace and junction boundaries immediately before edit staging, each commit and rollback; preserve original modes and guard against overwriting concurrent external edits.
+- Add deterministic failure-injection tests for partial edits, rollbacks, and Windows junction swaps.
+- Stop read-only ripgrep searches early when their output cap is exceeded while preserving complete partial results; regular exec remains unchanged.
+- Cache trusted screenshot C# compilation per MCP process in a temporary assembly, verify its SHA-256 before loading, and fall back to inline compilation when unavailable.
+- Support opt-in `web(action="fetch", format="text")` for readable HTML extraction; `raw` remains the default.
+
 ### Safety and correctness
 
 - Plan ordered file edits in memory before writing, produce bounded content diffs, stage writes before replacement and attempt rollback on partial failures.

@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { createServer } from "node:http";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import test from "node:test";
 
 import { applyChanges, previewChanges, type Change } from "../src/edit-store.js";
-import { assertNotDenied } from "../src/paths.js";
+import { assertNotDenied, assertRealWorkspacePath } from "../src/paths.js";
 import { normalizeRipgrepOutputLine, parseRipgrepOutputPath } from "../src/ripgrep-output.js";
 import { SqliteChangeStore } from "../src/sqlite-tools.js";
 import { capText, truncateUtf8 } from "../src/text.js";
@@ -184,3 +184,117 @@ test("directory-deny glob rejects its directory and descendants", () => {
   assert.throws(() => assertNotDenied(join(root, "src", "secrets", "key.txt"), root, globs), /blocked/);
   assert.doesNotThrow(() => assertNotDenied(join(root, "src", "public.ts"), root, globs));
 });
+
+test("failed second commit restores first file and removes staged temporary files", withTemp(async root => {
+  const first = join(root, "first.txt"), second = join(root, "second.txt");
+  writeFileSync(first, "ONE");
+  writeFileSync(second, "TWO");
+  const changes: Change[] = [
+    { type: "overwrite", path: "first.txt", newText: "1" },
+    { type: "overwrite", path: "second.txt", newText: "2" },
+  ];
+  await assert.rejects(
+    applyChanges(root, changes, { beforeCommit: index => {
+      if (index === 1) throw new Error("injected commit failure");
+    }}),
+    /injected commit failure/,
+  );
+  assert.equal(readFileSync(first, "utf8"), "ONE");
+  assert.equal(readFileSync(second, "utf8"), "TWO");
+  assert.equal(readdirSync(root).filter(name => name.includes(".ctm-tmp-")).length, 0);
+}));
+
+test("rollback refuses to overwrite external writes after a partial commit", withTemp(async root => {
+  const first = join(root, "first.txt");
+  writeFileSync(first, "ONE");
+  writeFileSync(join(root, "second.txt"), "TWO");
+  const changes: Change[] = [
+    { type: "overwrite", path: "first.txt", newText: "changed" },
+    { type: "overwrite", path: "second.txt", newText: "two" },
+  ];
+  await assert.rejects(
+    applyChanges(root, changes, { beforeCommit: index => {
+      if (index === 1) {
+        writeFileSync(first, "EXTERNAL");
+        throw new Error("injected failure");
+      }
+    }}),
+    /rollback incomplete/,
+  );
+  assert.equal(readFileSync(first, "utf8"), "EXTERNAL");
+  assert.equal(readFileSync(join(root, "second.txt"), "utf8"), "TWO");
+  assert.equal(readdirSync(root).filter(name => name.includes(".ctm-tmp-")).length, 0);
+}));
+
+test("concurrent change to an uncommitted file aborts and restores prior commits", withTemp(async root => {
+  writeFileSync(join(root, "first.txt"), "ONE");
+  const second = join(root, "second.txt");
+  writeFileSync(second, "TWO");
+  const changes: Change[] = [
+    { type: "overwrite", path: "first.txt", newText: "one" },
+    { type: "overwrite", path: "second.txt", newText: "two" },
+  ];
+  await assert.rejects(
+    applyChanges(root, changes, { beforeCommit: index => {
+      if (index === 1) writeFileSync(second, "EXTERNAL");
+    }}),
+    /File changed during commit/,
+  );
+  assert.equal(readFileSync(join(root, "first.txt"), "utf8"), "ONE");
+  assert.equal(readFileSync(second, "utf8"), "EXTERNAL");
+}));
+
+test("edit commit and rollback retain existing POSIX file permissions", {
+  skip: process.platform === "win32",
+}, withTemp(async root => {
+  const first = join(root, "first.txt");
+  const second = join(root, "second.txt");
+  writeFileSync(first, "original");
+  writeFileSync(second, "other");
+  chmodSync(first, 0o640);
+  const change: Change[] = [
+    { type: "overwrite", path: "first.txt", newText: "new" },
+  ];
+  await applyChanges(root, change);
+  assert.equal(statSync(first).mode & 0o777, 0o640);
+  await assert.rejects(
+    applyChanges(root, [
+      { type: "overwrite", path: "first.txt", newText: "temporary" },
+      { type: "overwrite", path: "second.txt", newText: "other-new" },
+    ], { beforeCommit: index => {
+      if (index === 1) throw new Error("injected");
+    }}),
+    /injected/,
+  );
+  assert.equal(readFileSync(first, "utf8"), "new");
+  assert.equal(statSync(first).mode & 0o777, 0o640);
+}));
+
+test("commit rechecks canonical paths after a directory becomes a junction", withTemp(async root => {
+  const external = mkdtempSync(join(tmpdir(), "ctm-junction-target-"));
+  const dir = join(root, "editable");
+  const moved = join(root, "moved");
+  mkdirSync(dir);
+  writeFileSync(join(dir, "file.txt"), "ORIGINAL");
+  writeFileSync(join(external, "file.txt"), "OUTSIDE");
+  let movedDirectory = false;
+  try {
+    await assert.rejects(applyChanges(root, [
+      { type: "overwrite", path: "editable/file.txt", newText: "CHANGED" },
+    ], {
+      validatePath: async name => {
+        await assertRealWorkspacePath(resolve(root, name), root, [root], []);
+      },
+      beforeCommit: () => {
+        renameSync(dir, moved);
+        movedDirectory = true;
+        symlinkSync(external, dir, "junction");
+      },
+    }), /Symlink or junction escapes/);
+    assert.equal(readFileSync(join(external, "file.txt"), "utf8"), "OUTSIDE");
+    assert.equal(readFileSync(join(moved, "file.txt"), "utf8"), "ORIGINAL");
+  } finally {
+    if (movedDirectory) rmSync(dir, { force: true, recursive: true });
+    rmSync(external, { force: true, recursive: true });
+  }
+}));

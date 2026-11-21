@@ -11,6 +11,8 @@ export interface ProcessResult {
   stderr: string;
   exitCode: number | null;
   timedOut: boolean;
+  /** Output reached its configured byte cap; a read-only process may have been stopped early. */
+  outputLimitReached?: boolean;
 }
 
 const shells = new Set(["bash", "bash.exe", "sh", "sh.exe", "cmd", "cmd.exe"]);
@@ -104,6 +106,7 @@ export class BoundedOutput {
       this.count += part.byteLength;
     }
   }
+  isTruncated(): boolean { return this.truncated; }
   text(): string {
     const marker = "\n[output truncated]\n";
     const all = Buffer.concat(this.chunks, this.count);
@@ -128,6 +131,8 @@ export async function runProcess(input: {
   cwd: string;
   timeoutMs: number;
   maxOutputBytes: number;
+  /** Only enable for read-only commands whose partial output remains useful. */
+  terminateOnOutputLimit?: boolean;
 }): Promise<ProcessResult> {
   const invocation = resolveProcessCommand(input.command, input.args);
   return new Promise(resolve => {
@@ -137,6 +142,7 @@ export async function runProcess(input: {
       cwd: input.cwd, shell: false, windowsHide: true, detached: process.platform !== "win32", env: scrubEnv(process.env),
     });
     let timedOut = false;
+    let outputLimitReached = false;
     let settled = false;
     const timer = setTimeout(() => {
       timedOut = true;
@@ -146,10 +152,17 @@ export async function runProcess(input: {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      resolve({ stdout: stdout.text(), stderr: stderr.text(), exitCode, timedOut });
+      resolve({ stdout: stdout.text(), stderr: stderr.text(), exitCode, timedOut, outputLimitReached });
     }
-    child.stdout?.on("data", (chunk: Buffer) => stdout.append(chunk));
-    child.stderr?.on("data", (chunk: Buffer) => stderr.append(chunk));
+    const stopWhenFull = (): void => {
+      if (!input.terminateOnOutputLimit || outputLimitReached || settled) return;
+      if (stdout.isTruncated() || stderr.isTruncated()) {
+        outputLimitReached = true;
+        killTree(child);
+      }
+    };
+    child.stdout?.on("data", (chunk: Buffer) => { stdout.append(chunk); stopWhenFull(); });
+    child.stderr?.on("data", (chunk: Buffer) => { stderr.append(chunk); stopWhenFull(); });
     child.on("error", error => { stderr.append(error.message); finish(null); });
     child.on("close", exitCode => finish(exitCode));
   });

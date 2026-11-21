@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { chmod, mkdir, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
+import { dirname, relative, resolve } from "node:path";
 import type { Change, DiffEntry } from "./edit-store.js";
 import { capText } from "./text.js";
 
@@ -147,7 +147,7 @@ function temporaryPath(path: string): string {
   return `${path}.ctm-tmp-${randomUUID()}`;
 }
 
-async function restore(path: string, previous: string | null): Promise<void> {
+async function restore(path: string, previous: string | null, priorMode?: number): Promise<void> {
   if (previous === null) {
     await unlink(path).catch(error => {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
@@ -156,32 +156,41 @@ async function restore(path: string, previous: string | null): Promise<void> {
   }
   const temporary = temporaryPath(path);
   try {
-    await writeFile(temporary, previous, { encoding: "utf8", flag: "wx" });
+    await writeFile(temporary, previous, { encoding: "utf8", flag: "wx", mode: 0o600 });
+    if (priorMode !== undefined) await chmod(temporary, priorMode);
     await rename(temporary, path);
   } finally {
     await unlink(temporary).catch(() => {});
   }
 }
 
+/** Inject failures into a private workspace test without changing the public MCP API. */
+export interface EditCommitHooks {
+  beforeCommit?: (index: number) => void | Promise<void>;
+  /** Revalidate canonical workspace and deny-glob boundaries immediately before I/O. */
+  validatePath?: (relativePath: string) => Promise<void>;
+}
+
 /** Stage all writes first. Per-file renames are atomic; cross-file rollback is best effort. */
-export async function applyChanges(root: string, changes: Change[]): Promise<void> {
+export async function applyChanges(root: string, changes: Change[], hooks: EditCommitHooks = {}): Promise<void> {
   const plan = await planChanges(root, changes);
   const updates = plan.files.filter(file => file.before !== file.after);
   const staged = new Map<string, string>();
+  const priorModes = new Map<string, number>();
   const committed: FileState[] = [];
   try {
     for (const file of updates) {
-      if (file.after === null) continue;
+      await hooks.validatePath?.(file.path);
       const path = resolve(root, file.path);
+      if (file.before !== null) priorModes.set(path, (await stat(path)).mode);
+      if (file.after === null) continue;
       await mkdir(dirname(path), { recursive: true });
       const temp = temporaryPath(path);
       staged.set(path, temp);
-      const options = { encoding: "utf8" as const, flag: "wx" as const };
-      await writeFile(temp, file.after, options);
-      if (file.before !== null && process.platform !== "win32") {
-        const info = await stat(path);
-        await chmod(temp, info.mode);
-      }
+      await writeFile(temp, file.after, { encoding: "utf8", flag: "wx", mode: 0o600 });
+      // Preserve existing POSIX permissions and the Windows read-only bit.
+      const targetMode = priorModes.get(path) ?? (0o666 & ~process.umask());
+      await chmod(temp, targetMode);
     }
 
     // Catch ordinary concurrent modifications after planning, before touching any target.
@@ -191,8 +200,14 @@ export async function applyChanges(root: string, changes: Change[]): Promise<voi
       }
     }
 
-    for (const file of updates) {
+    for (const [index, file] of updates.entries()) {
+      await hooks.beforeCommit?.(index);
+      await hooks.validatePath?.(file.path);
       const path = resolve(root, file.path);
+      // Recheck immediately before each operation, not only before the batch.
+      if (await readMaybe(path) !== file.before) {
+        throw new Error(`File changed during commit: ${file.path}. Preview again.`);
+      }
       if (file.after === null) await unlink(path);
       else await rename(staged.get(path)!, path);
       committed.push(file);
@@ -200,8 +215,15 @@ export async function applyChanges(root: string, changes: Change[]): Promise<voi
   } catch (error) {
     const rollbackErrors: string[] = [];
     for (const file of committed.reverse()) {
-      try { await restore(resolve(root, file.path), file.before); }
-      catch (rollbackError) {
+      try {
+        await hooks.validatePath?.(file.path);
+        const path = resolve(root, file.path);
+        // Do not silently overwrite another writer's changes while recovering.
+        if (await readMaybe(path) !== file.after) {
+          throw new Error("File changed after commit; refusing to overwrite external changes");
+        }
+        await restore(path, file.before, priorModes.get(path));
+      } catch (rollbackError) {
         rollbackErrors.push(`${file.path}: ${String(rollbackError)}`);
       }
     }
@@ -210,8 +232,12 @@ export async function applyChanges(root: string, changes: Change[]): Promise<voi
     }
     throw error;
   } finally {
-    for (const temp of staged.values()) {
-      await unlink(temp).catch(() => {});
+    for (const [path, temp] of staged) {
+      try {
+        // A moved directory must not redirect cleanup into an untrusted junction.
+        await hooks.validatePath?.(relative(root, path));
+        await unlink(temp);
+      } catch { /* A displaced temp may remain; never follow an unsafe path. */ }
     }
   }
 }

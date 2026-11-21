@@ -514,7 +514,9 @@ function createMcpServer(): McpServer {
       await assertEditChangePaths(pending.workspaceId, pending.changes);
       const { absolutePath } = await workspaces.resolveSafe(pending.workspaceId, ".");
       await assertFilesUnchanged(absolutePath, pending.fingerprints);
-      await applyChanges(absolutePath, pending.changes);
+      await applyChanges(absolutePath, pending.changes, {
+        validatePath: async path => { await workspaces.resolveSafe(pending.workspaceId, path); },
+      });
       return textResult(`Applied ${pending.changes.length} change(s) from ${actionId}`, {
         applied: true,
         action_id: actionId,
@@ -638,17 +640,18 @@ function createMcpServer(): McpServer {
     "web",
     {
       title: "Web",
-      description: "Configured public web access. action=search queries SearXNG; action=fetch retrieves public HTTP(S) while blocking private/local targets.",
+      description: "Configured public web access. action=search queries SearXNG; action=fetch retrieves public HTTP(S) while blocking private/local targets. Optional format=text extracts readable HTML.",
       inputSchema: {
         action: z.enum(["search", "fetch"]),
         query: z.string().optional().describe("Required for search."),
         limit: z.number().int().min(1).max(10).default(5),
         url: z.string().url().optional().describe("Required for fetch."),
+        format: z.enum(["raw", "text"]).default("raw").describe("Fetch output: original response (raw) or readable HTML text. Default raw preserves compatibility."),
       },
       annotations: { readOnlyHint: true, openWorldHint: true },
       outputSchema: webOutputSchema,
     },
-    async ({ action, query, limit, url }) => {
+    async ({ action, query, limit, url, format }) => {
       if (!config.webToolsEnabled) throw new Error("Web tools are disabled. Enable web in config.json or CTM_WEB_TOOLS=1.");
       if (action === "search") {
         if (!query) throw new Error("query is required for web action=search.");
@@ -659,7 +662,7 @@ function createMcpServer(): McpServer {
         );
       }
       if (!url) throw new Error("url is required for web action=fetch.");
-      const result = await webFetch(config, url);
+      const result = await webFetch(config, url, format);
       return textResult(
         [
           `final_url: ${result.finalUrl}`,
@@ -795,7 +798,9 @@ async function gitDiffTool(
 
 function textResult(text: string, structuredContent: object = {}) {
   const redactedText = redactText(text);
-  const redactedStructuredContent = redactValue({ result: redactedText, ...structuredContent });
+  const redactedStructuredContent = redactValue(structuredContent) as Record<string, unknown>;
+  // Keep the separately redacted result authoritative, without scanning it twice.
+  redactedStructuredContent.result = redactedText;
   return {
     content: [{ type: "text" as const, text: redactedText }],
     structuredContent: redactedStructuredContent,
@@ -999,15 +1004,23 @@ async function searchTextFilesWithRipgrep(
     cwd: workspaceRoot,
     timeoutMs: 30_000,
     maxOutputBytes: config.maxOutputBytes,
+    terminateOnOutputLimit: true,
   });
 
   if (result.exitCode === null && /enoent|not found|could not be found/i.test(result.stderr)) return null;
-  if (result.exitCode === 1) return "";
-  if (result.exitCode !== 0) return null;
+  if (!result.outputLimitReached && result.exitCode === 1) return "";
+  if (!result.outputLimitReached && result.exitCode !== 0) return null;
 
-  const lines = result.stdout.split(/\r?\n/).filter((line) => line.length > 0);
+  // An early stop may cut the final line in half; only return complete matches.
+  let output = result.stdout;
+  if (result.outputLimitReached) {
+    output = output.replace(/\n\[output truncated\]\n$/, "");
+    output = output.slice(0, output.lastIndexOf("\n") + 1);
+  }
+  const lines = output.split(/\r?\n/).filter(line => line.length > 0);
   const filteredLines = filterRipgrepOutputLines(workspaceRoot, lines, maxMatches);
-  return capText(filteredLines.join("\n"), config.maxOutputBytes);
+  const formatted = filteredLines.join("\n") + (result.outputLimitReached ? "\n[search output truncated]" : "");
+  return capText(formatted, config.maxOutputBytes);
 }
 
 function filterRipgrepOutputLines(workspaceRoot: string, lines: string[], maxLines: number): string[] {

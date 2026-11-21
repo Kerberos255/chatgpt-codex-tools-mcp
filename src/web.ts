@@ -1,5 +1,6 @@
 import { Agent } from "undici";
 import { validatePublicUrl, createPinnedAgent } from "./public-fetch-policy.js";
+import { formatFetchedBody, type FetchFormat } from "./html-text.js";
 import { createRequire } from "node:module";
 const packageVersion = (createRequire(import.meta.url)("../package.json") as { version: string }).version;
 import type { Config } from "./config.js";
@@ -64,7 +65,7 @@ export async function webSearch(config: Config, query: string, limit: number): P
   }));
 }
 
-export async function webFetch(config: Config, inputUrl: string): Promise<FetchResult> {
+export async function webFetch(config: Config, inputUrl: string, format: FetchFormat = "raw"): Promise<FetchResult> {
   ensureWebToolsEnabled(config);
   return withAbortDeadline(config.webTimeoutMs, async signal => {
     let target = await validatePublicUrl(inputUrl);
@@ -86,12 +87,13 @@ export async function webFetch(config: Config, inputUrl: string): Promise<FetchR
 
         const contentType = response.headers.get("content-type") || "";
         const body = await readBodyCapped(response, config.webMaxBytes);
-        const text = decodeUtf8(body.bytes);
+        const source = decodeUtf8(body.bytes);
+        const text = formatFetchedBody(source, contentType, format);
         return {
           finalUrl: target.url.toString(),
           status: response.status,
           contentType,
-          title: extractTitle(text),
+          title: extractTitle(source),
           text,
           truncated: body.truncated,
         };

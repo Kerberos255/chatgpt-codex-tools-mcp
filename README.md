@@ -324,6 +324,9 @@ Enable in `config.json`:
 - `web` with `action="search"` queries only the configured SearXNG instance.
 - `web` with `action="fetch"` accepts public HTTP(S) URLs and blocks localhost,
   private network targets, embedded credentials, and unsafe redirects.
+- `web(action="fetch", format="text")` extracts readable text from HTML and omits
+  navigation, scripts and layout markup. The default `format="raw"` preserves
+  the original response body for existing clients.
 - No cookies, browser login state, authorization headers, or client certificates
   are forwarded.
 

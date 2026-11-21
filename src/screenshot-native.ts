@@ -192,9 +192,13 @@ $ProgressPreference = "SilentlyContinue"
 try {
   Add-Type -AssemblyName System.Windows.Forms
   Add-Type -AssemblyName System.Drawing
-  Add-Type -ReferencedAssemblies System.Drawing,System.Windows.Forms -TypeDefinition @'
+  if ($env:CTM_SHOT_ASSEMBLY) {
+    Add-Type -Path $env:CTM_SHOT_ASSEMBLY
+  } else {
+    Add-Type -ReferencedAssemblies System.Drawing,System.Windows.Forms -TypeDefinition @'
 ` + NATIVE_SCREENSHOT_SOURCE + String.raw`
 '@
+  }
   $metadata = [CtmScreenshot]::Capture($env:CTM_SHOT_MODE, [int]$env:CTM_SHOT_MONITOR,
     [long]$env:CTM_SHOT_WINDOW_HANDLE, $env:CTM_SHOT_WINDOW_TITLE, ($env:CTM_SHOT_CROP -eq "1"),
     [int]$env:CTM_SHOT_X, [int]$env:CTM_SHOT_Y, [int]$env:CTM_SHOT_WIDTH, [int]$env:CTM_SHOT_HEIGHT, $env:CTM_SHOT_OUTPUT)
