@@ -168,6 +168,7 @@ const processResultOutputSchema = z.object({
   stderr: z.string(),
   exitCode: z.number().nullable(),
   timedOut: z.boolean(),
+  outputLimitReached: z.boolean().optional(),
 });
 
 const gitOutputSchema = processResultOutputSchema.extend({
